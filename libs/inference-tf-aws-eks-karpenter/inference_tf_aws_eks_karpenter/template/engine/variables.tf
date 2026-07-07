@@ -25,3 +25,102 @@ variable "custom_tags" {
   description = "Additional tags applied to all resources created by this template."
   type        = map(string)
 }
+
+# --- LeaderWorkerSet ---
+
+variable "lws_version" {
+  description = "Version of the LeaderWorkerSet Helm chart."
+  type        = string
+}
+
+# --- KRO ---
+
+variable "kro_version" {
+  description = "Version of the KRO Helm chart."
+  type        = string
+}
+
+# --- Gang Scheduling ---
+
+variable "gang_scheduling_provider" {
+  description = "Gang scheduling provider: 'coscheduling', 'volcano', or 'none'."
+  type        = string
+}
+
+variable "coscheduling_version" {
+  description = "Version of the scheduler-plugins Helm chart."
+  type        = string
+}
+
+variable "volcano_version" {
+  description = "Version of the Volcano Helm chart."
+  type        = string
+}
+
+# --- Karpenter Multi-Node NodePool ---
+
+variable "multinode_instance_families" {
+  description = "Allowed EC2 instance families for multi-node GPU nodes."
+  type        = list(string)
+}
+
+variable "multinode_capacity_types" {
+  description = "Allowed capacity types for multi-node GPU nodes."
+  type        = list(string)
+}
+
+variable "multinode_gpu_limit" {
+  description = "Maximum total GPUs the multi-node NodePool can provision."
+  type        = number
+}
+
+variable "multinode_consolidate_after" {
+  description = "Duration after which empty multi-node nodes are consolidated."
+  type        = string
+}
+
+variable "multinode_root_volume_size" {
+  description = "Root EBS volume size for multi-node GPU nodes."
+  type        = string
+}
+
+# --- NVIDIA Device Plugin ---
+
+variable "nvidia_plugin_version" {
+  description = "Version of the nvidia-device-plugin Helm chart."
+  type        = string
+}
+
+variable "enable_nfd" {
+  description = "Enable Node Feature Discovery alongside the GPU plugin."
+  type        = bool
+}
+
+# --- EFA Device Plugin ---
+
+variable "efa_plugin_version" {
+  description = "Version of the aws-efa-k8s-device-plugin Helm chart."
+  type        = string
+}
+
+# --- EFS CSI Driver ---
+
+variable "efs_csi_version" {
+  description = "Version of the aws-efs-csi-driver Helm chart."
+  type        = string
+}
+
+variable "efs_csi_role_arn" {
+  description = "IAM role ARN for the EFS CSI driver service account (IRSA)."
+  type        = string
+}
+
+variable "efs_filesystem_id" {
+  description = "EFS filesystem ID for model weight storage. Leave empty to skip PV creation."
+  type        = string
+}
+
+variable "model_weights_storage_size" {
+  description = "Storage size for the model weights PV."
+  type        = string
+}
