@@ -11,7 +11,16 @@ overrides:
   # karpenter_version: "1.6.0"
   # custom_tags: {}
   #
-  # --- Multi-Node Platform ---
+  # --- Multi-Node Platform (opt-in) ---
+  # Set enable flags to true to deploy multi-node inference modules.
+  # enable_lws: true
+  # enable_kro: true
+  # enable_multinode_nodepool: true
+  # enable_nvidia_plugin: true
+  # enable_efa_plugin: true
+  # enable_efs_csi: true
+  #
+  # --- Multi-Node Configuration (only relevant when enabled) ---
   # lws_version: "0.6.2"
   # kro_version: "0.2.1"
   # gang_scheduling_provider: "none"  # coscheduling | volcano | none

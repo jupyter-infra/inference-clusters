@@ -4,6 +4,15 @@ kubernetes_version  = "1.33"
 karpenter_version   = "1.6.0"
 custom_tags         = {}
 
+# Module enable flags — all off by default.
+# Set to true to opt into multi-node inference infrastructure.
+enable_lws                = false
+enable_kro                = false
+enable_multinode_nodepool = false
+enable_nvidia_plugin      = false
+enable_efa_plugin         = false
+enable_efs_csi            = false
+
 # LeaderWorkerSet
 lws_version = "0.6.2"
 

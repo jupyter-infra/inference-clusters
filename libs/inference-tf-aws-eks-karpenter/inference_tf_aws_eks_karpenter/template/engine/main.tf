@@ -52,8 +52,11 @@ locals {
 # NodePools/EC2NodeClasses are added in follow-up commits.
 
 # --- Multi-Node Inference Platform Modules ---
+# Each module is gated behind an enable_* flag (default: false).
+# Only clusters that opt into multi-node inference pay the cost.
 
 module "lws" {
+  count  = var.enable_lws ? 1 : 0
   source = "./modules/lws"
 
   lws_namespace = "lws-system"
@@ -61,6 +64,7 @@ module "lws" {
 }
 
 module "kro" {
+  count  = var.enable_kro ? 1 : 0
   source = "./modules/kro"
 
   kro_namespace = "kro-system"
@@ -68,6 +72,7 @@ module "kro" {
 }
 
 module "gang_scheduling" {
+  count  = var.gang_scheduling_provider != "none" ? 1 : 0
   source = "./modules/gang-scheduling"
 
   gang_scheduling_provider  = var.gang_scheduling_provider
@@ -77,6 +82,7 @@ module "gang_scheduling" {
 }
 
 module "karpenter_multinode" {
+  count  = var.enable_multinode_nodepool ? 1 : 0
   source = "./modules/karpenter-multinode"
 
   karpenter_node_role      = "${var.cluster_name_prefix}-${local.doc_postfix}-node"
@@ -91,6 +97,7 @@ module "karpenter_multinode" {
 }
 
 module "nvidia_device_plugin" {
+  count  = var.enable_nvidia_plugin ? 1 : 0
   source = "./modules/nvidia-device-plugin"
 
   nvidia_namespace      = "nvidia-device-plugin"
@@ -99,6 +106,7 @@ module "nvidia_device_plugin" {
 }
 
 module "efa_device_plugin" {
+  count  = var.enable_efa_plugin ? 1 : 0
   source = "./modules/efa-device-plugin"
 
   efa_namespace      = "kube-system"
@@ -106,6 +114,7 @@ module "efa_device_plugin" {
 }
 
 module "efs_csi_driver" {
+  count  = var.enable_efs_csi ? 1 : 0
   source = "./modules/efs-csi-driver"
 
   efs_namespace              = "kube-system"

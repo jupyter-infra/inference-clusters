@@ -26,6 +26,39 @@ variable "custom_tags" {
   type        = map(string)
 }
 
+# --- Module Enable Flags ---
+# All default to false so multi-node infrastructure only deploys when opted in.
+
+variable "enable_lws" {
+  description = "Install the LeaderWorkerSet CRD and controller."
+  type        = bool
+}
+
+variable "enable_kro" {
+  description = "Install the KRO controller."
+  type        = bool
+}
+
+variable "enable_multinode_nodepool" {
+  description = "Create the Karpenter NodePool/EC2NodeClass for multi-node GPU inference."
+  type        = bool
+}
+
+variable "enable_nvidia_plugin" {
+  description = "Install the NVIDIA device plugin and GPU Feature Discovery."
+  type        = bool
+}
+
+variable "enable_efa_plugin" {
+  description = "Install the AWS EFA device plugin."
+  type        = bool
+}
+
+variable "enable_efs_csi" {
+  description = "Install the EFS CSI driver and create model weights storage."
+  type        = bool
+}
+
 # --- LeaderWorkerSet ---
 
 variable "lws_version" {
