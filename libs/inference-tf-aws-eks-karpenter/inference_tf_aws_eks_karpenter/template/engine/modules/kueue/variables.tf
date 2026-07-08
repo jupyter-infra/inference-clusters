@@ -42,3 +42,20 @@ variable "workload_namespace" {
   description = "Namespace where the LocalQueue is created for inference workloads."
   type        = string
 }
+
+# --- Optional feature toggles ---
+
+variable "enable_prometheus_metrics" {
+  description = "Install ServiceMonitor for Kueue controller metrics (requires Prometheus/kube-prometheus)."
+  type        = bool
+}
+
+variable "enable_topology_aware_scheduling" {
+  description = "Enable TopologyAwareScheduling feature gate for co-location guarantees (alpha/beta — requires node topology labels)."
+  type        = bool
+}
+
+variable "topology_levels" {
+  description = "Topology hierarchy levels for TAS (e.g. ['topology.kubernetes.io/zone', 'kubernetes.io/hostname'])."
+  type        = list(string)
+}

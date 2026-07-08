@@ -120,6 +120,21 @@ variable "kueue_workload_namespace" {
   type        = string
 }
 
+variable "kueue_enable_prometheus" {
+  description = "Enable ServiceMonitor for Kueue metrics (requires Prometheus/kube-prometheus)."
+  type        = bool
+}
+
+variable "kueue_enable_tas" {
+  description = "Enable TopologyAwareScheduling feature gate for co-location guarantees (alpha/beta)."
+  type        = bool
+}
+
+variable "kueue_topology_levels" {
+  description = "Topology hierarchy for TAS (e.g. zone then hostname for single-AZ co-location)."
+  type        = list(string)
+}
+
 # --- Karpenter Multi-Node NodePool ---
 
 variable "multinode_instance_families" {

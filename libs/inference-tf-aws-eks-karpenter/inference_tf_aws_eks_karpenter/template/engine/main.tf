@@ -84,6 +84,11 @@ module "kueue" {
   cpu_quota          = var.kueue_cpu_quota
   memory_quota       = var.kueue_memory_quota
   workload_namespace = var.kueue_workload_namespace
+
+  # Optional features
+  enable_prometheus_metrics       = var.kueue_enable_prometheus
+  enable_topology_aware_scheduling = var.kueue_enable_tas
+  topology_levels                 = var.kueue_topology_levels
 }
 
 module "karpenter_multinode" {

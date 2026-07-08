@@ -29,6 +29,9 @@ kueue_gpu_lending_limit  = 0
 kueue_cpu_quota          = 768
 kueue_memory_quota       = "4Ti"
 kueue_workload_namespace = "inference"
+kueue_enable_prometheus  = false
+kueue_enable_tas         = false
+kueue_topology_levels    = ["topology.kubernetes.io/zone", "kubernetes.io/hostname"]
 
 # Karpenter Multi-Node NodePool
 multinode_instance_families  = ["p5", "p4d"]
