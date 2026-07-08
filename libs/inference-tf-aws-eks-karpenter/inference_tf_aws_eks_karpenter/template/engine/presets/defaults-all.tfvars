@@ -8,6 +8,7 @@ custom_tags         = {}
 # Set to true to opt into multi-node inference infrastructure.
 enable_lws                = false
 enable_kro                = false
+enable_kueue              = false
 enable_multinode_nodepool = false
 enable_nvidia_plugin      = false
 enable_efa_plugin         = false
@@ -19,10 +20,15 @@ lws_version = "0.6.2"
 # KRO
 kro_version = "0.2.1"
 
-# Gang Scheduling
-gang_scheduling_provider = "none"
-coscheduling_version     = "0.30.0"
-volcano_version          = "1.10.0"
+# Kueue (admission control + gang scheduling for LWS workloads)
+kueue_version            = "0.10.0"
+kueue_cluster_queue_name = "inference-gpu"
+kueue_cohort_name        = "gpu-cohort"
+kueue_gpu_quota          = 64
+kueue_gpu_lending_limit  = 0
+kueue_cpu_quota          = 768
+kueue_memory_quota       = "4Ti"
+kueue_workload_namespace = "inference"
 
 # Karpenter Multi-Node NodePool
 multinode_instance_families  = ["p5", "p4d"]

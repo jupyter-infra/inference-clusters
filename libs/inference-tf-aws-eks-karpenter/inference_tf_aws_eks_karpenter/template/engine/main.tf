@@ -71,14 +71,19 @@ module "kro" {
   kro_version   = var.kro_version
 }
 
-module "gang_scheduling" {
-  count  = var.gang_scheduling_provider != "none" ? 1 : 0
-  source = "./modules/gang-scheduling"
+module "kueue" {
+  count  = var.enable_kueue ? 1 : 0
+  source = "./modules/kueue"
 
-  gang_scheduling_provider  = var.gang_scheduling_provider
-  gang_scheduling_namespace = "scheduler-plugins"
-  coscheduling_version      = var.coscheduling_version
-  volcano_version           = var.volcano_version
+  kueue_namespace    = "kueue-system"
+  kueue_version      = var.kueue_version
+  cluster_queue_name = var.kueue_cluster_queue_name
+  cohort_name        = var.kueue_cohort_name
+  gpu_quota          = var.kueue_gpu_quota
+  gpu_lending_limit  = var.kueue_gpu_lending_limit
+  cpu_quota          = var.kueue_cpu_quota
+  memory_quota       = var.kueue_memory_quota
+  workload_namespace = var.kueue_workload_namespace
 }
 
 module "karpenter_multinode" {

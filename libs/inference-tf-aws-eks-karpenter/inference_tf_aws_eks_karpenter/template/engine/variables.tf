@@ -73,20 +73,50 @@ variable "kro_version" {
   type        = string
 }
 
-# --- Gang Scheduling ---
+# --- Kueue (admission control + gang scheduling) ---
 
-variable "gang_scheduling_provider" {
-  description = "Gang scheduling provider: 'coscheduling', 'volcano', or 'none'."
+variable "enable_kueue" {
+  description = "Install Kueue for admission control and gang scheduling of LWS workloads."
+  type        = bool
+}
+
+variable "kueue_version" {
+  description = "Version of the Kueue Helm chart."
   type        = string
 }
 
-variable "coscheduling_version" {
-  description = "Version of the scheduler-plugins Helm chart."
+variable "kueue_cluster_queue_name" {
+  description = "Name of the ClusterQueue for GPU inference workloads."
   type        = string
 }
 
-variable "volcano_version" {
-  description = "Version of the Volcano Helm chart."
+variable "kueue_cohort_name" {
+  description = "Cohort name for capacity borrowing/lending between queues."
+  type        = string
+}
+
+variable "kueue_gpu_quota" {
+  description = "Nominal GPU quota for the inference ClusterQueue."
+  type        = number
+}
+
+variable "kueue_gpu_lending_limit" {
+  description = "Maximum GPUs lent to other queues when idle."
+  type        = number
+}
+
+variable "kueue_cpu_quota" {
+  description = "Nominal CPU quota for the inference ClusterQueue."
+  type        = number
+}
+
+variable "kueue_memory_quota" {
+  description = "Nominal memory quota for the inference ClusterQueue."
+  type        = string
+}
+
+variable "kueue_workload_namespace" {
+  description = "Namespace where the LocalQueue is created for inference workloads."
   type        = string
 }
 

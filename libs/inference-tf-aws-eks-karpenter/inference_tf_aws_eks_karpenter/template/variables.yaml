@@ -15,6 +15,7 @@ overrides:
   # Set enable flags to true to deploy multi-node inference modules.
   # enable_lws: true
   # enable_kro: true
+  # enable_kueue: true
   # enable_multinode_nodepool: true
   # enable_nvidia_plugin: true
   # enable_efa_plugin: true
@@ -23,9 +24,14 @@ overrides:
   # --- Multi-Node Configuration (only relevant when enabled) ---
   # lws_version: "0.6.2"
   # kro_version: "0.2.1"
-  # gang_scheduling_provider: "none"  # coscheduling | volcano | none
-  # coscheduling_version: "0.30.0"
-  # volcano_version: "1.10.0"
+  # kueue_version: "0.10.0"
+  # kueue_cluster_queue_name: "inference-gpu"
+  # kueue_cohort_name: "gpu-cohort"
+  # kueue_gpu_quota: 64
+  # kueue_gpu_lending_limit: 0
+  # kueue_cpu_quota: 768
+  # kueue_memory_quota: "4Ti"
+  # kueue_workload_namespace: "inference"
   # multinode_instance_families: ["p5", "p4d"]
   # multinode_capacity_types: ["on-demand"]
   # multinode_gpu_limit: 64
