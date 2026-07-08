@@ -26,6 +26,16 @@ variable "custom_tags" {
   type        = map(string)
 }
 
+# --- Platform Node Placement ---
+# Operator controllers (Kueue, LWS, KRO) run on platform nodes, not GPU
+# dataplane nodes. This keeps controllers off expensive GPU instances and
+# ensures they survive node scaling events on the GPU pool.
+
+variable "platform_node_selector" {
+  description = "Node selector for operator controllers (pins them to platform/system nodes)."
+  type        = map(string)
+}
+
 # --- Module Enable Flags ---
 # All default to false so multi-node infrastructure only deploys when opted in.
 

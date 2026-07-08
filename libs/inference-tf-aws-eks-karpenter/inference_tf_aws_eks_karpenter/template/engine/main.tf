@@ -59,16 +59,18 @@ module "lws" {
   count  = var.enable_lws ? 1 : 0
   source = "./modules/lws"
 
-  lws_namespace = "lws-system"
-  lws_version   = var.lws_version
+  lws_namespace          = "lws-system"
+  lws_version            = var.lws_version
+  platform_node_selector = var.platform_node_selector
 }
 
 module "kro" {
   count  = var.enable_kro ? 1 : 0
   source = "./modules/kro"
 
-  kro_namespace = "kro-system"
-  kro_version   = var.kro_version
+  kro_namespace          = "kro-system"
+  kro_version            = var.kro_version
+  platform_node_selector = var.platform_node_selector
 }
 
 module "kueue" {
@@ -90,6 +92,7 @@ module "kueue" {
   topology_levels             = var.kueue_topology_levels
   wait_for_pods_ready_timeout = var.kueue_wait_for_pods_ready_timeout
   wait_for_pods_ready_retries = var.kueue_wait_for_pods_ready_retries
+  platform_node_selector      = var.platform_node_selector
 }
 
 module "karpenter_multinode" {

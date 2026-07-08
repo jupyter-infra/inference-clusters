@@ -42,6 +42,24 @@ resource "helm_release" "kueue" {
     name  = "controller.waitForPodsReady.requeuingStrategy.backoffLimitCount"
     value = tostring(var.wait_for_pods_ready_retries)
   }
+
+  # Pin controller to platform nodes (not GPU dataplane nodes)
+  dynamic "set" {
+    for_each = var.platform_node_selector
+    content {
+      name  = "controller.nodeSelector.${replace(set.key, "/", "\\.")}"
+      value = set.value
+    }
+  }
+
+  set {
+    name  = "controller.tolerations[0].key"
+    value = "CriticalAddonsOnly"
+  }
+  set {
+    name  = "controller.tolerations[0].operator"
+    value = "Exists"
+  }
 }
 
 # Topology resource — defines the data center hierarchy for TAS.

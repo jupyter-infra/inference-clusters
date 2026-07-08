@@ -57,3 +57,8 @@ variable "wait_for_pods_ready_retries" {
   description = "Number of times Kueue re-queues a workload that fails waitForPodsReady."
   type        = number
 }
+
+variable "platform_node_selector" {
+  description = "Node selector to pin the Kueue controller to platform nodes."
+  type        = map(string)
+}

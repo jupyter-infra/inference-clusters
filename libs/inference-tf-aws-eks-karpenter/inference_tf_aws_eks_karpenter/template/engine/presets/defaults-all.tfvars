@@ -4,6 +4,10 @@ kubernetes_version  = "1.33"
 karpenter_version   = "1.6.0"
 custom_tags         = {}
 
+# Platform node selector — pins operator controllers (Kueue, LWS, KRO)
+# to system/platform nodes so they don't land on GPU dataplane nodes.
+platform_node_selector = { "node-role.kubernetes.io/platform" = "" }
+
 # Module enable flags — all off by default.
 # Set to true to opt into multi-node inference infrastructure.
 enable_lws                = false
