@@ -28,10 +28,10 @@ kueue_gpu_quota          = 64
 kueue_gpu_lending_limit  = 0
 kueue_cpu_quota          = 768
 kueue_memory_quota       = "4Ti"
-kueue_workload_namespace = "inference"
-kueue_enable_prometheus  = false
-kueue_enable_tas         = false
-kueue_topology_levels    = ["topology.kubernetes.io/zone", "kubernetes.io/hostname"]
+kueue_workload_namespace          = "inference"
+kueue_topology_levels             = ["topology.kubernetes.io/zone", "kubernetes.io/hostname"]
+kueue_wait_for_pods_ready_timeout = "15m"
+kueue_wait_for_pods_ready_retries = 3
 
 # Karpenter Multi-Node NodePool
 multinode_instance_families  = ["p5", "p4d"]

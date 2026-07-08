@@ -120,19 +120,19 @@ variable "kueue_workload_namespace" {
   type        = string
 }
 
-variable "kueue_enable_prometheus" {
-  description = "Enable ServiceMonitor for Kueue metrics (requires Prometheus/kube-prometheus)."
-  type        = bool
-}
-
-variable "kueue_enable_tas" {
-  description = "Enable TopologyAwareScheduling feature gate for co-location guarantees (alpha/beta)."
-  type        = bool
-}
-
 variable "kueue_topology_levels" {
-  description = "Topology hierarchy for TAS (e.g. zone then hostname for single-AZ co-location)."
+  description = "Topology hierarchy for TAS co-location (zone → hostname ensures EFA same-AZ)."
   type        = list(string)
+}
+
+variable "kueue_wait_for_pods_ready_timeout" {
+  description = "How long Kueue waits for all pods to become Ready before evicting."
+  type        = string
+}
+
+variable "kueue_wait_for_pods_ready_retries" {
+  description = "Number of re-queue attempts on waitForPodsReady timeout."
+  type        = number
 }
 
 # --- Karpenter Multi-Node NodePool ---

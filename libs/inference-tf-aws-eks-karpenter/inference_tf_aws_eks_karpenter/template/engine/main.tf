@@ -85,10 +85,11 @@ module "kueue" {
   memory_quota       = var.kueue_memory_quota
   workload_namespace = var.kueue_workload_namespace
 
-  # Optional features
-  enable_prometheus_metrics       = var.kueue_enable_prometheus
-  enable_topology_aware_scheduling = var.kueue_enable_tas
-  topology_levels                 = var.kueue_topology_levels
+  # TAS, Prometheus, waitForPodsReady are always enabled when Kueue is on —
+  # they are required for multi-node EFA inference (not optional).
+  topology_levels             = var.kueue_topology_levels
+  wait_for_pods_ready_timeout = var.kueue_wait_for_pods_ready_timeout
+  wait_for_pods_ready_retries = var.kueue_wait_for_pods_ready_retries
 }
 
 module "karpenter_multinode" {

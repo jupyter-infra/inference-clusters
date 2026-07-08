@@ -12,25 +12,58 @@ resource "helm_release" "kueue" {
     value = "true"
   }
 
-  # Prometheus metrics (optional — requires kube-prometheus stack)
+  # TopologyAwareScheduling — required for EFA co-location guarantees
   set {
-    name  = "controller.metrics.serviceMonitor.enabled"
-    value = var.enable_prometheus_metrics ? "true" : "false"
+    name  = "controller.featureGates.TopologyAwareScheduling"
+    value = "true"
   }
 
-  # TopologyAwareScheduling feature gate (alpha/beta — not on by default)
-  dynamic "set" {
-    for_each = var.enable_topology_aware_scheduling ? [1] : []
-    content {
-      name  = "controller.featureGates.TopologyAwareScheduling"
-      value = "true"
+  # Prometheus ServiceMonitor — required for queue health visibility
+  set {
+    name  = "controller.metrics.serviceMonitor.enabled"
+    value = "true"
+  }
+
+  # waitForPodsReady — required to prevent silent resource leaks on
+  # partial provisioning failure (3/4 nodes arrive, 4th never does)
+  set {
+    name  = "controller.waitForPodsReady.enable"
+    value = "true"
+  }
+  set {
+    name  = "controller.waitForPodsReady.timeout"
+    value = var.wait_for_pods_ready_timeout
+  }
+  set {
+    name  = "controller.waitForPodsReady.requeuingStrategy.timestamp"
+    value = "Creation"
+  }
+  set {
+    name  = "controller.waitForPodsReady.requeuingStrategy.backoffLimitCount"
+    value = tostring(var.wait_for_pods_ready_retries)
+  }
+}
+
+# Topology resource — defines the data center hierarchy for TAS.
+# EFA requires all nodes in the same AZ; TAS enforces this at admission time.
+resource "kubernetes_manifest" "topology" {
+  manifest = {
+    apiVersion = "kueue.x-k8s.io/v1alpha1"
+    kind       = "Topology"
+    metadata = {
+      name = "default"
+    }
+    spec = {
+      levels = [for level in var.topology_levels : { nodeLabel = level }]
     }
   }
+
+  depends_on = [helm_release.kueue]
 }
 
 resource "kubernetes_manifest" "gpu_resource_flavor" {
   manifest = {
-    apiVersion = "kueue.x-k8s.io/v1beta1"
+    apiVersion = "kueue.x-k8s.io/v1beta2"
     kind       = "ResourceFlavor"
     metadata = {
       name = "gpu-multinode"
@@ -39,6 +72,7 @@ resource "kubernetes_manifest" "gpu_resource_flavor" {
       nodeLabels = {
         "inference/node-type" = "multinode-gpu"
       }
+      topologyName = "default"
       tolerations = [{
         key      = "nvidia.com/gpu"
         operator = "Exists"
@@ -47,7 +81,7 @@ resource "kubernetes_manifest" "gpu_resource_flavor" {
     }
   }
 
-  depends_on = [helm_release.kueue]
+  depends_on = [kubernetes_manifest.topology]
 }
 
 resource "kubernetes_manifest" "gpu_cluster_queue" {
@@ -104,22 +138,4 @@ resource "kubernetes_manifest" "gpu_local_queue" {
   }
 
   depends_on = [kubernetes_manifest.gpu_cluster_queue]
-}
-
-# Topology resource for TAS (optional — only when feature gate is enabled)
-resource "kubernetes_manifest" "topology" {
-  count = var.enable_topology_aware_scheduling ? 1 : 0
-
-  manifest = {
-    apiVersion = "kueue.x-k8s.io/v1beta1"
-    kind       = "Topology"
-    metadata = {
-      name = "gpu-topology"
-    }
-    spec = {
-      levels = [for level in var.topology_levels : { nodeLabel = level }]
-    }
-  }
-
-  depends_on = [helm_release.kueue]
 }
