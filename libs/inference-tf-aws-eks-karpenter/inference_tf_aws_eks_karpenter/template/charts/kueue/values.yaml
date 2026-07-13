@@ -5,4 +5,8 @@ gpuLendingLimit: 0
 cpuQuota: 768
 memoryQuota: "4Ti"
 workloadNamespace: inference
+# When true, the ClusterQueue includes the gpu-p-multinode flavor (the high-end P pool).
+# Wired from var.enable_gpu_p_nodepool: without the p node pool, a P workload would admit
+# then hang Pending, so the flavor is only offered when P nodes can be provisioned.
+enableGpuPNodes: false
 chartContentHash: ""

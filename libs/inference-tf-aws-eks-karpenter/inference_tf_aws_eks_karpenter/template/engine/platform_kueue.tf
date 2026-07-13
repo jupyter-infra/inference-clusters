@@ -138,6 +138,9 @@ resource "helm_release" "kueue_config" {
     { name = "cpuQuota", value = tostring(var.kueue_cpu_quota) },
     { name = "memoryQuota", value = var.kueue_memory_quota },
     { name = "workloadNamespace", value = var.workload_namespace },
+    # Offer the p-tier flavor only when the P node pool exists (else P workloads admit then
+    # hang Pending). P gang scheduling is NOT e2e-tested (scarce H100 capacity) — g is.
+    { name = "enableGpuPNodes", value = tostring(var.enable_gpu_p_nodepool) },
     { name = "chartContentHash", value = local.chart_hashes["kueue"] },
   ]
 

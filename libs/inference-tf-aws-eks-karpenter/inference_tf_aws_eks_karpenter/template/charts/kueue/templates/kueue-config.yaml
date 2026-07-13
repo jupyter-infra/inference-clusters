@@ -26,6 +26,29 @@ spec:
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
 metadata:
+  name: gpu-p-multinode
+spec:
+  # The high-end p-tier (H100-class). NOT e2e-tested — P capacity is scarce/ICE-prone, so
+  # g-tier is the tested path — but the flavor MUST exist so Kueue can reach the P pool at
+  # all. A P workload opts in with nodeSelector inference/accelerator=nvidia-p, which makes
+  # the g flavor incompatible so admission falls to this one. The p pool carries a SECOND
+  # taint (inference/gpu-tier=high) on top of nvidia.com/gpu — this flavor tolerates both,
+  # so admitted P pods can actually land. It is only wired into the ClusterQueue when
+  # enableGpuPNodes (below); without the p node pool a P workload would admit then hang Pending.
+  nodeLabels:
+    inference/accelerator: nvidia-p
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+    - key: inference/gpu-tier
+      operator: Equal
+      value: "high"
+      effect: NoSchedule
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
   name: cpu-default
 spec:
   # Match-anything CPU flavor: no nodeLabels (any node).
@@ -39,6 +62,9 @@ spec:
   namespaceSelector: {}
   cohortName: {{ .Values.cohortName }}
   resourceGroups:
+    # Flavors are tried in order: g-tier first (cost-safe default), then the p-tier (only
+    # present when the p node pool is enabled). A pod reaches p by nodeSelecting
+    # inference/accelerator=nvidia-p, which makes the g flavor incompatible.
     - coveredResources: ["nvidia.com/gpu"]
       flavors:
         - name: gpu-multinode
@@ -48,6 +74,15 @@ spec:
               {{- if .Values.gpuLendingLimit }}
               lendingLimit: {{ .Values.gpuLendingLimit | quote }}
               {{- end }}
+        {{- if .Values.enableGpuPNodes }}
+        - name: gpu-p-multinode
+          resources:
+            - name: nvidia.com/gpu
+              nominalQuota: {{ .Values.gpuQuota | quote }}
+              {{- if .Values.gpuLendingLimit }}
+              lendingLimit: {{ .Values.gpuLendingLimit | quote }}
+              {{- end }}
+        {{- end }}
     - coveredResources: ["cpu", "memory"]
       flavors:
         - name: cpu-default
