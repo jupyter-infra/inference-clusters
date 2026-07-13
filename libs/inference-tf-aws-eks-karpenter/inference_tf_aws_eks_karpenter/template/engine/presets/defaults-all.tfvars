@@ -22,7 +22,8 @@ admin_role_names = []
 admin_user_names = []
 
 # --- Karpenter / platform charts ---
-metrics_server_chart_version = "3.12.2"
+metrics_server_chart_version     = "3.12.2"
+cluster_autoscaler_chart_version = "9.58.0"
 
 # --- GPU serving path: always on (GPUs are mandatory for inference) ---
 nvidia_device_plugin_version       = "v0.17.1"
@@ -61,16 +62,17 @@ common_images = []
 
 # --- Multi-node inference: LWS + Kueue + EFA ---
 # All gated (false by default). Enable for multi-node tracks.
-enable_lws     = false
+enable_lws        = false
 lws_chart_version = "0.9.0"
 
 enable_kueue             = false
 kueue_chart_version      = "0.18.2"
+workload_namespace       = "inference"
 kueue_cluster_queue_name = "inference-gpu"
 kueue_gpu_quota          = 64
 kueue_gpu_lending_limit  = 0
 kueue_cpu_quota          = 768
 kueue_memory_quota       = "4Ti"
 
-enable_efa                    = false
+enable_efa                      = false
 efa_device_plugin_chart_version = "v0.5.29"

@@ -151,6 +151,17 @@ variable "metrics_server_chart_version" {
   type        = string
 }
 
+variable "cluster_autoscaler_chart_version" {
+  description = <<-EOT
+    The Helm chart version for the Kubernetes Cluster Autoscaler (system MNG scaling).
+
+    The image tag is derived from kubernetes_version (v<minor>.0), not this chart version.
+
+    Recommended: 9.58.0
+  EOT
+  type        = string
+}
+
 variable "nvidia_device_plugin_version" {
   description = <<-EOT
     The nvcr.io/nvidia/k8s-device-plugin image tag to vendor into ECR.
@@ -347,8 +358,9 @@ variable "enable_kueue" {
     Install Kueue for admission control and gang scheduling of LWS workloads.
 
     Kueue gates workloads behind GPU quota — the entire LWS group is admitted
-    atomically or stays suspended. Includes TAS (AZ co-location for EFA),
-    Prometheus ServiceMonitor, and waitForPodsReady (evicts on partial provisioning).
+    atomically or stays suspended. Includes a Prometheus ServiceMonitor and
+    waitForPodsReady (evicts + requeues on partial provisioning). AZ co-location for
+    multi-node NCCL/EFA is enforced by the LWS exclusive-topology annotation, not Kueue TAS.
 
     Requires enable_lws = true (LWS CRD must exist for Kueue's integration).
 
@@ -364,6 +376,19 @@ variable "kueue_chart_version" {
     Published to registry.k8s.io (pull-through, no vendoring).
 
     Recommended: 0.18.2
+  EOT
+  type        = string
+}
+
+variable "workload_namespace" {
+  description = <<-EOT
+    The shared Kubernetes namespace where inference workloads run.
+
+    Created unconditionally by the engine and referenced by platform components (the Kueue
+    LocalQueue, and any future shared RBAC/quota). Owned here so it outlives optional
+    operators — toggling one off never deletes the namespace or the workloads in it.
+
+    Recommended: inference
   EOT
   type        = string
 }

@@ -299,9 +299,8 @@ data "aws_iam_policy_document" "karpenter_controller" {
   }
 }
 
-# The iam_policy module only supports (actions, resources) — no conditions/sid —
-# so it cannot express Karpenter's tag-scoped policy without silently dropping
-# every condition (→ over-broad). Attach the policy document directly instead.
+# Karpenter's policy is tag-scoped (every statement carries conditions), so attach the
+# policy document directly via aws_iam_role_policy rather than through a generic module.
 module "karpenter_controller_role" {
   source             = "./modules/iam_role"
   role_name          = "${local.resource_name_prefix}-karpenter"
