@@ -38,6 +38,9 @@ resource "helm_release" "kro" {
       value = "${local.ecr_registry}/registry-k8s/kro/kro"
     },
     { name = "image.tag", value = "v${var.kro_chart_version}" },
+    # Two replicas so a leader failover (system-NG node drain) keeps a warm standby;
+    # KRO is leader-elected (enableLeaderElection defaults true), so one is active.
+    { name = "deployment.replicaCount", value = "2" },
     # System NG placement. The chart REPLACES nodeSelector wholesale (no fallback
     # merge), so carry the chart's own kubernetes.io/os=linux alongside our selector.
     { name = "deployment.nodeSelector.kubernetes\\.io/os", value = "linux" },

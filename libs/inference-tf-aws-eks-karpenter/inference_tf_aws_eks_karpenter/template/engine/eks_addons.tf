@@ -4,9 +4,16 @@ resource "time_sleep" "wait_for_nodes" {
 }
 
 locals {
-  # The system NG is tainted inference/role=system:NoSchedule. Every
-  # Deployment-based addon we place there must tolerate it. vpc-cni and kube-proxy
-  # are tolerate-all DaemonSets and need no toleration.
+  # The system NG is tainted inference/role=system:NoSchedule AND labeled
+  # inference/role=system. Every controller Deployment we place there needs BOTH:
+  #   - the toleration, to get PAST the taint, and
+  #   - the nodeSelector, to be PINNED to the system NG — a toleration alone only
+  #     PERMITS the system NG, it doesn't prevent the pod from landing on some other
+  #     untainted node (e.g. a future Karpenter CPU pool). The nodeSelector is what
+  #     keeps addon controllers off Karpenter nodes for good.
+  # DaemonSet parts (vpc-cni, kube-proxy, the ebs/s3 CSI node plugins, the CloudWatch
+  # agent + Fluent Bit) are deliberately NOT pinned: they must run on EVERY node,
+  # Karpenter GPU nodes included.
   system_toleration = {
     key      = "inference/role"
     operator = "Equal"
@@ -79,9 +86,10 @@ resource "aws_eks_addon" "coredns" {
   addon_name   = "coredns"
   tags         = local.combined_tags
 
-  # coredns is a Deployment — it must tolerate the tainted system NG to schedule.
+  # coredns is a Deployment — pin it to the system NG (nodeSelector) and tolerate the taint.
   configuration_values = jsonencode({
-    tolerations = [local.system_toleration]
+    nodeSelector = local.system_node_selector
+    tolerations  = [local.system_toleration]
   })
 
   depends_on = [time_sleep.wait_for_nodes]
@@ -98,11 +106,13 @@ resource "aws_eks_addon" "ebs_csi_driver" {
   addon_name   = "aws-ebs-csi-driver"
   tags         = local.combined_tags
 
-  # The controller is a Deployment (tolerate the system taint); the node plugin is
-  # a DaemonSet that must tolerate all so it also runs on Karpenter nodes.
+  # The controller is a Deployment — pin to the system NG + tolerate its taint. The node
+  # plugin is a DaemonSet that must tolerate all taints so it also runs on Karpenter nodes
+  # (an EBS volume can be mounted by a workspace/GPU pod on any node).
   configuration_values = jsonencode({
     controller = {
-      tolerations = [local.system_toleration]
+      nodeSelector = local.system_node_selector
+      tolerations  = [local.system_toleration]
     }
     node = {
       tolerateAllTaints = true
@@ -121,7 +131,7 @@ resource "aws_eks_addon" "ebs_csi_driver" {
 # path (the s3-models StorageClass, charts/storage). Authenticates via Pod Identity
 # to the dedicated s3_csi_role (platform_storage.tf), NOT the node role. The
 # node plugin is a DaemonSet that must tolerate all taints so mounts work on GPU /
-# Karpenter nodes; the controller is a Deployment pinned to the tainted system NG.
+# Karpenter nodes; the controller is a Deployment pinned (nodeSelector) to the system NG.
 resource "aws_eks_addon" "s3_csi_driver" {
   cluster_name  = module.eks_cluster.cluster_name
   addon_name    = "aws-mountpoint-s3-csi-driver"
@@ -130,7 +140,8 @@ resource "aws_eks_addon" "s3_csi_driver" {
 
   configuration_values = jsonencode({
     controller = {
-      tolerations = [local.system_toleration]
+      nodeSelector = local.system_node_selector
+      tolerations  = [local.system_toleration]
     }
     node = {
       tolerateAllTaints = true

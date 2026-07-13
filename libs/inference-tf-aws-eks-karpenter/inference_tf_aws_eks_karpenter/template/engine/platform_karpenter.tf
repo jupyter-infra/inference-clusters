@@ -101,6 +101,13 @@ resource "helm_release" "karpenter" {
   # pull-through import-on-miss fire.
   set = [
     {
+      # Two replicas so a leader failover (node drain/consolidation) keeps a warm
+      # standby. Chart already defaults to 2 + a PDB; pinned here so the intent
+      # survives a chart-default change.
+      name  = "replicas"
+      value = "2"
+    },
+    {
       name  = "controller.image.repository"
       value = "${local.ecr_registry}/ecr-public/karpenter/controller"
     },

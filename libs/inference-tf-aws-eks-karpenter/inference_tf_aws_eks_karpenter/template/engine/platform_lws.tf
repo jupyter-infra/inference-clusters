@@ -25,7 +25,9 @@ resource "helm_release" "leader_worker_set" {
   create_namespace = true
 
   set = [
-    { name = "replicaCount", value = "1" },
+    # Two replicas so a leader failover (system-NG node drain) keeps a warm standby;
+    # the LWS controller is leader-elected, so only one is active at a time.
+    { name = "replicaCount", value = "2" },
     # Repin the controller image to its pull-through URI (PRIMARY resolution):
     # registry.k8s.io/lws/lws -> <registry>/registry-k8s/lws/lws.
     { name = "image.manager.repository", value = "${local.ecr_registry}/registry-k8s/lws/lws" },

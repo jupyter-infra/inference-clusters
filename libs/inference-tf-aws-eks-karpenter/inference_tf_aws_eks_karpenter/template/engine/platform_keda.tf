@@ -29,6 +29,14 @@ resource "helm_release" "keda" {
   # Image repins + placement are too nested for flat `set` entries (each component's
   # image is a registry/repository/tag triple), so pass one values doc.
   values = [yamlencode({
+    # Two replicas each for the leader-elected operator + metrics-apiserver so a
+    # failover (system-NG node drain) keeps a warm standby. Both are single-active
+    # (only the leader serves), so this buys availability, not throughput. The
+    # admission webhooks are stateless (not leader-elected), so they stay at the
+    # chart default.
+    operator      = { replicaCount = 2 }
+    metricsServer = { replicaCount = 2 }
+
     # All three components vendored to ECR; the chart builds "<registry>/<repository>:<tag>".
     image = {
       keda = {

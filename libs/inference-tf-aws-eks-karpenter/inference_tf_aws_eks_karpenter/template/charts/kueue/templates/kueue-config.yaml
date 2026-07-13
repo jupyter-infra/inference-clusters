@@ -1,20 +1,23 @@
-apiVersion: kueue.x-k8s.io/v1beta2
-kind: Topology
-metadata:
-  name: default
-spec:
-  levels:
-    - nodeLabel: topology.kubernetes.io/zone
-    - nodeLabel: kubernetes.io/hostname
----
+# NOTE: the workload namespace ({{ .Values.workloadNamespace }}) is created by the ENGINE
+# (kubernetes_namespace_v1.workload, platform_workloads.tf), NOT this chart — it is shared,
+# ungated infra that must outlive Kueue. The LocalQueue below just references it.
+#
+# NO Topology CR / Topology-Aware Scheduling. TAS discovers admissible topology domains
+# from nodes that ALREADY exist at admission time — which deadlocks a scale-from-zero
+# GPU pool (no g-nodes yet → no zone domains → never admitted → Karpenter never
+# provisions → still no nodes). AZ co-location for multi-node NCCL/EFA is instead
+# enforced at provision time by the LWS `exclusive-topology` annotation (leader schedules
+# first, workers inherit its zone as a nodeSelector) — the Karpenter-native pattern.
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
 metadata:
   name: gpu-multinode
 spec:
+  # Target the g-tier (always-on, cheaper) GPU pool. The p-tier (nvidia-p) carries an
+  # extra inference/gpu-tier=high taint requiring explicit opt-in, so admitted pods
+  # would stay Pending there without that toleration; g-tier only taints nvidia.com/gpu.
   nodeLabels:
-    inference/accelerator: nvidia-p
-  topologyName: default
+    inference/accelerator: nvidia-g
   tolerations:
     - key: nvidia.com/gpu
       operator: Exists
@@ -24,7 +27,9 @@ apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
 metadata:
   name: cpu-default
-spec: {}
+spec:
+  # Match-anything CPU flavor: no nodeLabels (any node).
+  {}
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ClusterQueue
