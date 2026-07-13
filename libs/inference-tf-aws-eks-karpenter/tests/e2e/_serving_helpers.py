@@ -377,3 +377,94 @@ def assert_on_karpenter_gpu(release: str, accelerator: str = "nvidia-g") -> str:
     labels = kubectl("get", "node", node, "-o", "jsonpath={.metadata.labels}").stdout
     assert accelerator in labels, f"pod must run on a Karpenter {accelerator} node, got {node} labels {labels}"
     return node
+
+
+def deployment_names_by_instance(namespace: str, helm_release: str) -> list[str]:
+    """Deployment names in a namespace that belong to a Helm release.
+
+    Discovered via the standard app.kubernetes.io/instance=<release> label rather than
+    hardcoded — chart fullname logic varies (e.g. cluster-autoscaler renders
+    'cluster-autoscaler-aws-cluster-autoscaler'), and a wrong literal name is exactly the
+    silent-miss class that hides a broken replica/nodeSelector key."""
+    out = kubectl(
+        "get",
+        "deployments",
+        "-n",
+        namespace,
+        "-l",
+        f"app.kubernetes.io/instance={helm_release}",
+        "-o",
+        "jsonpath={.items[*].metadata.name}",
+        check=False,
+    ).stdout.strip()
+    return out.split() if out else []
+
+
+def assert_deployment_replicas_ready(namespace: str, deployment: str, expected: int) -> None:
+    """Assert a Deployment declares AND has ready `expected` replicas.
+
+    Reading BOTH .spec.replicas and .status.readyReplicas is the point: .spec proves the
+    chart honored our replica key (a phantom key would leave it at the chart default), and
+    .status proves the standbys actually scheduled on the system MNG (not stuck Pending)."""
+    spec = kubectl("get", "deployment", deployment, "-n", namespace, "-o", "jsonpath={.spec.replicas}").stdout.strip()
+    ready = kubectl(
+        "get", "deployment", deployment, "-n", namespace, "-o", "jsonpath={.status.readyReplicas}"
+    ).stdout.strip()
+    assert spec == str(expected), f"{namespace}/{deployment} .spec.replicas={spec}, expected {expected}"
+    assert ready == str(expected), (
+        f"{namespace}/{deployment} .status.readyReplicas={ready}, expected {expected} (standby not scheduled?)"
+    )
+
+
+def system_node_names() -> list[str]:
+    """Names of the Ready system-MNG nodes (inference/role=system label)."""
+    out = kubectl(
+        "get", "nodes", "-l", "inference/role=system", "-o", "jsonpath={.items[*].metadata.name}", check=False
+    ).stdout.strip()
+    return out.split() if out else []
+
+
+def _parse_cpu_to_millicores(quantity: str) -> int:
+    """Parse a k8s CPU quantity ('2', '1930m') to integer millicores."""
+    quantity = quantity.strip()
+    if quantity.endswith("m"):
+        return int(quantity[:-1])
+    return int(float(quantity) * 1000)
+
+
+def system_node_allocatable_cpu_millicores() -> int:
+    """Allocatable CPU (millicores) of the first system node — the per-node sizing unit.
+
+    Ballast CPU requests are derived from this so the scale-up test isn't hardcoded to a
+    specific instance type (a fixed request would either never trigger scale-up on a large
+    SKU or over-trigger on a small one)."""
+    nodes = system_node_names()
+    assert nodes, "no system-MNG nodes found (inference/role=system)"
+    cpu = kubectl("get", "node", nodes[0], "-o", "jsonpath={.status.allocatable.cpu}").stdout.strip()
+    return _parse_cpu_to_millicores(cpu)
+
+
+def assert_pods_by_selector_on_system_mng(namespace: str, selector: str, description: str) -> None:
+    """Assert every pod matching a label selector runs on a tainted system-MNG node.
+
+    System nodes carry inference/role=system; Karpenter inference nodes do not. A control
+    -loop / addon-controller pod drifting off the system MNG (missing nodeSelector) is a
+    silent placement regression the deployment succeeding would not catch."""
+    nodes = (
+        kubectl("get", "pods", "-n", namespace, "-l", selector, "-o", "jsonpath={.items[*].spec.nodeName}")
+        .stdout.strip()
+        .split()
+    )
+    assert nodes, f"no pods found for {description} ({selector}) in {namespace}"
+    for node in set(nodes):
+        labels = kubectl("get", "node", node, "-o", "jsonpath={.metadata.labels}").stdout
+        assert '"inference/role":"system"' in labels, (
+            f"{description} pod on {node} is NOT on the system MNG (labels: {labels[:200]})"
+        )
+
+
+def assert_pods_on_system_mng(namespace: str, helm_release: str) -> None:
+    """Assert every pod of a Helm release runs on a tainted system-MNG node."""
+    assert_pods_by_selector_on_system_mng(
+        namespace, f"app.kubernetes.io/instance={helm_release}", f"release {helm_release}"
+    )

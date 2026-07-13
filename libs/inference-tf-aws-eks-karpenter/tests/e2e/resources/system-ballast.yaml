@@ -1,0 +1,47 @@
+# Ballast Deployment for the Cluster Autoscaler scale-up E2E test.
+#
+# Pods that (a) tolerate the system taint + nodeSelect the system MNG, and (b) each
+# request a large slice of CPU — so once ${replicas} of them exceed the free capacity
+# on the current system nodes, the surplus goes Pending and Cluster Autoscaler must
+# grow the tagged system ASG to schedule them. Pure sleep containers (no real work).
+#
+# Substitutions: ${image}, ${namespace}, ${replicas}, ${cpu_request}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ca-ballast
+  namespace: ${namespace}
+spec:
+  replicas: ${replicas}
+  selector:
+    matchLabels:
+      app: ca-ballast
+  template:
+    metadata:
+      labels:
+        app: ca-ballast
+    spec:
+      nodeSelector:
+        inference/role: system
+      tolerations:
+        - key: inference/role
+          operator: Equal
+          value: system
+          effect: NoSchedule
+      terminationGracePeriodSeconds: 5
+      # Spread across nodes so the requests can't all pack onto one node — forces the
+      # scheduler to need MORE nodes rather than bin-packing tightly.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: ca-ballast
+      containers:
+        - name: ballast
+          image: ${image}
+          command: ["sh", "-c", "echo ballast ready; sleep 3600"]
+          resources:
+            requests:
+              cpu: "${cpu_request}"

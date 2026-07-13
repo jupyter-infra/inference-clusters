@@ -1,8 +1,12 @@
 # LeaderWorkerSet for the Kueue gang-scheduling GPU E2E test.
 #
 # 2-pod group requesting 1 GPU each, targeting the gpu-multinode flavor.
-# Proves: Kueue admits with GPU flavor → nodeLabels injected → pods land on
-# Karpenter nvidia-p (g-tier) nodes → both reach Running.
+# Proves: Kueue admits on GPU quota → pods land on Karpenter nvidia-g nodes → both Running.
+#
+# AZ co-location (multi-node NCCL/EFA) is enforced by the LWS exclusive-topology
+# annotation, NOT Kueue TAS: the leader schedules first (Karpenter provisions a g-node in
+# whatever AZ has capacity), then LWS stamps that AZ as a nodeSelector on the workers. This
+# works scale-from-zero; TAS would deadlock (it needs g-nodes to exist before admission).
 #
 # Substitutions: ${image}, ${namespace}, ${queue_name}
 apiVersion: leaderworkerset.x-k8s.io/v1
@@ -12,6 +16,9 @@ metadata:
   namespace: ${namespace}
   labels:
     kueue.x-k8s.io/queue-name: ${queue_name}
+  annotations:
+    # AZ co-location: leader schedules first, workers inherit its zone as a nodeSelector.
+    leaderworkerset.sigs.k8s.io/exclusive-topology: topology.kubernetes.io/zone
 spec:
   replicas: 1
   leaderWorkerTemplate:
@@ -29,9 +36,13 @@ spec:
             operator: Exists
             effect: NoSchedule
         containers:
+          # The nvidia.com/gpu REQUEST (below) is what forces GPU-node placement — the
+          # test asserts scheduling/co-location, not GPU compute, so the command is a
+          # plain sleep (the generic client image has no nvidia-smi; running it would
+          # exit 127 and fail the container without telling us anything about placement).
           - name: gpu-worker
             image: ${image}
-            command: ["sh", "-c", "nvidia-smi && echo leader ready && sleep 600"]
+            command: ["sh", "-c", "echo leader ready; sleep 600"]
             resources:
               requests:
                 nvidia.com/gpu: "1"
@@ -53,7 +64,7 @@ spec:
         containers:
           - name: gpu-worker
             image: ${image}
-            command: ["sh", "-c", "nvidia-smi && echo worker ready && sleep 600"]
+            command: ["sh", "-c", "echo worker ready; sleep 600"]
             resources:
               requests:
                 nvidia.com/gpu: "1"
