@@ -44,14 +44,24 @@ output "model_store_bucket_arn" {
   value       = module.model_store.bucket_arn
 }
 
-output "batch_store_bucket" {
-  description = "Name of the dedicated S3 batch-inference bucket (intake/, output/, metrics/)."
-  value       = module.batch_store.bucket_name
+output "batch_intake_bucket" {
+  description = "Name of the S3 bucket batch-inference requests flow into."
+  value       = module.batch_intake.bucket_name
 }
 
-output "batch_store_bucket_arn" {
-  description = "ARN of the dedicated S3 batch-inference bucket."
-  value       = module.batch_store.bucket_arn
+output "batch_intake_bucket_arn" {
+  description = "ARN of the S3 batch-inference intake bucket."
+  value       = module.batch_intake.bucket_arn
+}
+
+output "batch_output_bucket" {
+  description = "Name of the S3 bucket batch-inference results and metrics land in."
+  value       = module.batch_output.bucket_name
+}
+
+output "batch_output_bucket_arn" {
+  description = "ARN of the S3 batch-inference output bucket."
+  value       = module.batch_output.bucket_arn
 }
 
 output "keda_namespace" {

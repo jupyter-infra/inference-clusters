@@ -1,9 +1,9 @@
 # === Storage day-1 path ===
 #
 # The template ships storage INFRASTRUCTURE only — the model-store bucket, the batch
-# bucket, the node/pod S3 grants, the two StorageClasses — never any weights (those
-# arrive via onboarder). Day-1 offers two weight-serving paths, both fed by the
-# model-store bucket:
+# intake/output buckets, the node/pod S3 grants, the two StorageClasses — never any
+# weights (those arrive via onboarder). Day-1 offers two weight-serving paths, both
+# fed by the model-store bucket:
 #   1. S3-direct: the engine streams weights straight from S3 (vLLM RunAI streamer /
 #      Tensorizer / SDK) using the NODE ROLE's S3 grant — no filesystem.
 #   2. S3-mount: the Mountpoint-for-S3 CSI driver mounts s3://<bucket>/models as a
@@ -54,46 +54,50 @@ resource "aws_iam_role_policy" "node_s3" {
   policy = data.aws_iam_policy_document.node_s3.json
 }
 
-# --- Dedicated batch-inference bucket (always created, starts empty) ---
+# --- Dedicated batch-inference buckets (always created, start empty) ---
 #
 # Batch data is high-churn (requests in, results + metrics out, benchmark cleanup
-# deletes) — the opposite lifecycle of the write-once model store. A dedicated bucket
-# keeps that churn, and the write grant it needs, away from the weights entirely.
-module "batch_store" {
+# deletes) — the opposite lifecycle of the write-once model store. Dedicated buckets
+# keep that churn, and the write grant it needs, away from the weights entirely.
+# Intake and output are SEPARATE buckets: requests flow into batch_intake, workers
+# publish results and run summaries (metrics/) to batch_output. The bucket boundary
+# makes each data flow one-directional and lets retention/lifecycle rules differ.
+module "batch_intake" {
   source = "./modules/s3_bucket"
 
-  bucket_name_prefix = "${local.resource_name_prefix}-batch"
+  bucket_name_prefix = "${local.resource_name_prefix}-batch-in"
   combined_tags      = local.combined_tags
 }
 
-locals {
-  # Key-prefix conventions inside the batch bucket (documented layout, not resources):
-  # requests land under intake/; workers publish results under output/ and run
-  # summaries under metrics/.
-  batch_store_intake_prefix  = "intake"
-  batch_store_output_prefix  = "output"
-  batch_store_metrics_prefix = "metrics"
+module "batch_output" {
+  source = "./modules/s3_bucket"
+
+  bucket_name_prefix = "${local.resource_name_prefix}-batch-out"
+  combined_tags      = local.combined_tags
 }
 
-# Bespoke node-role grant for the batch bucket: full object lifecycle (get, put,
-# delete) but ONLY under the three batch prefixes — never the bucket root, never *.
+# Bespoke node-role grant for the batch buckets: full object lifecycle (get, put,
+# delete) scoped to each batch bucket ARN — never the model store, never *. Put on
+# intake lets the in-cluster harness seed requests; delete covers benchmark cleanup.
 # AbortMultipartUpload is the cleanup path SDK uploads use when a large multipart
-# result upload fails partway (same rationale as the onboarder grant).
+# upload fails partway (same rationale as the onboarder grant).
 data "aws_iam_policy_document" "node_batch_s3" {
   statement {
-    sid       = "ListBatchStore"
-    effect    = "Allow"
-    actions   = ["s3:ListBucket", "s3:GetBucketLocation"]
-    resources = [module.batch_store.bucket_arn]
+    sid     = "ListBatchStores"
+    effect  = "Allow"
+    actions = ["s3:ListBucket", "s3:GetBucketLocation"]
+    resources = [
+      module.batch_intake.bucket_arn,
+      module.batch_output.bucket_arn,
+    ]
   }
   statement {
     sid     = "ManageBatchData"
     effect  = "Allow"
     actions = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"]
     resources = [
-      "${module.batch_store.bucket_arn}/${local.batch_store_intake_prefix}/*",
-      "${module.batch_store.bucket_arn}/${local.batch_store_output_prefix}/*",
-      "${module.batch_store.bucket_arn}/${local.batch_store_metrics_prefix}/*",
+      "${module.batch_intake.bucket_arn}/*",
+      "${module.batch_output.bucket_arn}/*",
     ]
   }
 }

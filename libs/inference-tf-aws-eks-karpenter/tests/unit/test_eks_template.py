@@ -254,26 +254,27 @@ def test_node_s3_grant_scoped_to_bucket_not_star() -> None:
     assert "s3:PutObject" not in block and "s3:DeleteObject" not in block, "model store is read-only for nodes"
 
 
-def test_batch_store_is_dedicated_bucket() -> None:
-    """The batch bucket MUST be its own s3_bucket module instance with a distinct name prefix."""
+def test_batch_intake_and_output_are_dedicated_buckets() -> None:
+    """Batch intake and output MUST be separate s3_bucket module instances with distinct names."""
     content = (ENGINE / "platform_storage.tf").read_text()
-    match = re.search(r'module\s+"batch_store"\s*\{.*?\n\}', content, re.DOTALL)
-    assert match is not None, "module.batch_store not found"
-    block = match.group(0)
-    assert "./modules/s3_bucket" in block
-    assert "-batch" in block and "resource_name_prefix" in block
+    for name, suffix in (("batch_intake", "-batch-in"), ("batch_output", "-batch-out")):
+        match = re.search(rf'module\s+"{name}"\s*\{{.*?\n\}}', content, re.DOTALL)
+        assert match is not None, f"module.{name} not found"
+        block = match.group(0)
+        assert "./modules/s3_bucket" in block
+        assert suffix in block and "resource_name_prefix" in block
 
 
 def test_node_batch_s3_grant_scoped_to_batch_prefixes() -> None:
-    """The batch grant MUST cover the object lifecycle ONLY under the batch prefixes, never `*`."""
+    """The batch grant MUST cover the object lifecycle ONLY on the batch buckets, never `*`."""
     content = (ENGINE / "platform_storage.tf").read_text()
     block = _extract_block(content, "data", "aws_iam_policy_document", "node_batch_s3")
-    assert "module.batch_store.bucket_arn" in block and '"*"' not in block
+    assert '"*"' not in block
     assert "module.model_store.bucket_arn" not in block, "batch grant must not touch the model store"
     for action in ("s3:GetObject", "s3:PutObject", "s3:DeleteObject"):
         assert action in block
-    for prefix in ("batch_store_intake_prefix", "batch_store_output_prefix", "batch_store_metrics_prefix"):
-        assert prefix in block
+    for bucket in ("module.batch_intake.bucket_arn", "module.batch_output.bucket_arn"):
+        assert bucket in block
 
 
 def test_onboarder_iam_scopes_workload_ecr_and_bucket() -> None:
