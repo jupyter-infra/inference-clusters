@@ -31,8 +31,8 @@ locals {
 #
 # containerd/kubelet and any pod on any node reach the bucket through the node
 # instance role — no per-chart wiring. Scoped to THIS bucket ARN (never *): read
-# anywhere in the bucket, write only under output/. This is the day-1 streaming
-# grant AND what a pod's AWS SDK uses for S3-direct weight loading.
+# anywhere in the bucket. The role can write and delete only batch-data objects.
+# This is the day-1 streaming grant and the credential path for worker SDKs.
 data "aws_iam_policy_document" "node_s3" {
   statement {
     sid       = "ListModelStore"
