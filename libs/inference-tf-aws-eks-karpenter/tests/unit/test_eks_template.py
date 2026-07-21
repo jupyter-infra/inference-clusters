@@ -247,10 +247,19 @@ def test_ec2nodeclass_imds_hop_limit_allows_pod_creds() -> None:
 
 
 def test_node_s3_grant_scoped_to_bucket_not_star() -> None:
-    """The node-role S3 grant (S3-direct path) MUST be scoped to the bucket ARN, never `*`."""
+    """The node-role S3 grant must use the model-store bucket ARN."""
     block = _extract_block((ENGINE / "platform_storage.tf").read_text(), "data", "aws_iam_policy_document", "node_s3")
     assert "module.model_store.bucket_arn" in block and '"*"' not in block
-    assert "s3:GetObject" in block and "s3:PutObject" in block and "output" in block
+    assert "s3:GetObject" in block and "s3:PutObject" in block
+
+
+def test_node_s3_grant_supports_batch_object_lifecycle() -> None:
+    """The node role must manage objects in each batch-data prefix."""
+    block = _extract_block((ENGINE / "platform_storage.tf").read_text(), "data", "aws_iam_policy_document", "node_s3")
+    assert "s3:DeleteObject" in block
+    assert "model_store_intake_prefix" in block
+    assert "model_store_output_prefix" in block
+    assert "model_store_metrics_prefix" in block
 
 
 def test_onboarder_iam_scopes_workload_ecr_and_bucket() -> None:
