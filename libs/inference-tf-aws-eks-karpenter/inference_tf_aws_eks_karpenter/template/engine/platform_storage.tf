@@ -21,9 +21,9 @@ module "model_store" {
 locals {
   # Key-prefix conventions inside the one bucket (no resources — just documented
   # layout). models/ = weights (written by onboarder); intake/+output/ = batch.
-  model_store_models_prefix = "models"
-  model_store_intake_prefix = "intake"
-  model_store_output_prefix = "output"
+  model_store_models_prefix  = "models"
+  model_store_intake_prefix  = "intake"
+  model_store_output_prefix  = "output"
   model_store_metrics_prefix = "metrics"
 }
 
@@ -47,9 +47,9 @@ data "aws_iam_policy_document" "node_s3" {
     resources = ["${module.model_store.bucket_arn}/*"]
   }
   statement {
-    sid       = "WriteBatchData"
-    effect    = "Allow"
-    actions   = ["s3:PutObject", "s3:DeleteObject"]
+    sid     = "WriteBatchData"
+    effect  = "Allow"
+    actions = ["s3:PutObject", "s3:DeleteObject"]
     resources = [
       "${module.model_store.bucket_arn}/${local.model_store_intake_prefix}/*",
       "${module.model_store.bucket_arn}/${local.model_store_output_prefix}/*",
