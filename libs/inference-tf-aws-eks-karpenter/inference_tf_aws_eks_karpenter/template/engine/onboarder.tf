@@ -29,6 +29,7 @@ locals {
   workload_repo_arn    = "arn:${data.aws_partition.current.partition}:ecr:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:repository/${local.workload_repo_prefix}/*"
 
   models_s3_uri     = "s3://${module.model_store.bucket_name}/${local.model_store_models_prefix}"
+  batch_s3_uri      = "s3://${module.batch_store.bucket_name}"
   rehost_in_s3_uri  = "s3://${module.model_store.bucket_name}/rehost/in"
   rehost_out_s3_uri = "s3://${module.model_store.bucket_name}/rehost/out"
   onboarder_name    = "${local.resource_name_prefix}-onboarder"
@@ -90,8 +91,11 @@ module "onboarder" {
     ECR_REGISTRY    = local.ecr_registry
     WORKLOAD_PREFIX = local.workload_repo_prefix
     MODELS_S3_URI   = local.models_s3_uri
-    REHOST_IN       = local.rehost_in_s3_uri
-    REHOST_OUT      = local.rehost_out_s3_uri
+    # Discovery beacon only — the onboard job itself never touches the batch bucket.
+    # Workload tooling reads the CodeBuild env to find cluster buckets without jd state.
+    BATCH_S3_URI = local.batch_s3_uri
+    REHOST_IN    = local.rehost_in_s3_uri
+    REHOST_OUT   = local.rehost_out_s3_uri
     # Tags applied to every workload/* ECR repo the job creates (same tag set as all other
     # deployment resources) — so the repos are attributable + reapable by DeploymentId.
     # JSON-encoded map; onboarder.py decodes it into `aws ecr create-repository --tags`.

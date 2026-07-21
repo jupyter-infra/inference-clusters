@@ -35,13 +35,23 @@ output "kubeconfig_path" {
 }
 
 output "model_store_bucket" {
-  description = "Name of the shared S3 model/data store bucket (weights under models/, batch under intake/+output/)."
+  description = "Name of the shared S3 model store bucket (weights under models/)."
   value       = module.model_store.bucket_name
 }
 
 output "model_store_bucket_arn" {
-  description = "ARN of the shared S3 model/data store bucket."
+  description = "ARN of the shared S3 model store bucket."
   value       = module.model_store.bucket_arn
+}
+
+output "batch_store_bucket" {
+  description = "Name of the dedicated S3 batch-inference bucket (intake/, output/, metrics/)."
+  value       = module.batch_store.bucket_name
+}
+
+output "batch_store_bucket_arn" {
+  description = "ARN of the dedicated S3 batch-inference bucket."
+  value       = module.batch_store.bucket_arn
 }
 
 output "keda_namespace" {

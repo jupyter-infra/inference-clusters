@@ -247,19 +247,33 @@ def test_ec2nodeclass_imds_hop_limit_allows_pod_creds() -> None:
 
 
 def test_node_s3_grant_scoped_to_bucket_not_star() -> None:
-    """The node-role S3 grant must use the model-store bucket ARN."""
+    """The node-role model-store grant MUST be read-only and scoped to the bucket ARN, never `*`."""
     block = _extract_block((ENGINE / "platform_storage.tf").read_text(), "data", "aws_iam_policy_document", "node_s3")
     assert "module.model_store.bucket_arn" in block and '"*"' not in block
-    assert "s3:GetObject" in block and "s3:PutObject" in block
+    assert "s3:GetObject" in block
+    assert "s3:PutObject" not in block and "s3:DeleteObject" not in block, "model store is read-only for nodes"
 
 
-def test_node_s3_grant_supports_batch_object_lifecycle() -> None:
-    """The node role must manage objects in each batch-data prefix."""
-    block = _extract_block((ENGINE / "platform_storage.tf").read_text(), "data", "aws_iam_policy_document", "node_s3")
-    assert "s3:DeleteObject" in block
-    assert "model_store_intake_prefix" in block
-    assert "model_store_output_prefix" in block
-    assert "model_store_metrics_prefix" in block
+def test_batch_store_is_dedicated_bucket() -> None:
+    """The batch bucket MUST be its own s3_bucket module instance with a distinct name prefix."""
+    content = (ENGINE / "platform_storage.tf").read_text()
+    match = re.search(r'module\s+"batch_store"\s*\{.*?\n\}', content, re.DOTALL)
+    assert match is not None, "module.batch_store not found"
+    block = match.group(0)
+    assert "./modules/s3_bucket" in block
+    assert "-batch" in block and "resource_name_prefix" in block
+
+
+def test_node_batch_s3_grant_scoped_to_batch_prefixes() -> None:
+    """The batch grant MUST cover the object lifecycle ONLY under the batch prefixes, never `*`."""
+    content = (ENGINE / "platform_storage.tf").read_text()
+    block = _extract_block(content, "data", "aws_iam_policy_document", "node_batch_s3")
+    assert "module.batch_store.bucket_arn" in block and '"*"' not in block
+    assert "module.model_store.bucket_arn" not in block, "batch grant must not touch the model store"
+    for action in ("s3:GetObject", "s3:PutObject", "s3:DeleteObject"):
+        assert action in block
+    for prefix in ("batch_store_intake_prefix", "batch_store_output_prefix", "batch_store_metrics_prefix"):
+        assert prefix in block
 
 
 def test_onboarder_iam_scopes_workload_ecr_and_bucket() -> None:

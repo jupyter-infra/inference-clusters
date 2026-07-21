@@ -6,7 +6,7 @@ Mountpoint-for-S3 CSI supports STATIC provisioning ONLY (no dynamic PVCs): we sh
 a PersistentVolume with a fixed volumeHandle + the matching PVC. `storageClassName`
 is "" on both so they bind to each other directly (no dynamic provisioner). The
 mount is read-only and scoped to the models/ prefix; writes go via the S3-direct
-path (node role → output/). Auth is the s3_csi_role via Pod Identity.
+path (node role → batch bucket). Auth is the s3_csi_role via Pod Identity.
 */ -}}
 apiVersion: v1
 kind: PersistentVolume
