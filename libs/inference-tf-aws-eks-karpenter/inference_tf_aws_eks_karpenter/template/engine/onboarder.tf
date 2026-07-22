@@ -28,12 +28,10 @@ locals {
   workload_repo_prefix = "${local.resource_name_prefix}/workload"
   workload_repo_arn    = "arn:${data.aws_partition.current.partition}:ecr:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:repository/${local.workload_repo_prefix}/*"
 
-  models_s3_uri       = "s3://${module.model_store.bucket_name}/${local.model_store_models_prefix}"
-  batch_intake_s3_uri = "s3://${module.batch_intake.bucket_name}"
-  batch_output_s3_uri = "s3://${module.batch_output.bucket_name}"
-  rehost_in_s3_uri    = "s3://${module.model_store.bucket_name}/rehost/in"
-  rehost_out_s3_uri   = "s3://${module.model_store.bucket_name}/rehost/out"
-  onboarder_name      = "${local.resource_name_prefix}-onboarder"
+  models_s3_uri     = "s3://${module.model_store.bucket_name}/${local.model_store_models_prefix}"
+  rehost_in_s3_uri  = "s3://${module.model_store.bucket_name}/rehost/in"
+  rehost_out_s3_uri = "s3://${module.model_store.bucket_name}/rehost/out"
+  onboarder_name    = "${local.resource_name_prefix}-onboarder"
 }
 
 # Extra IAM for the onboard job: create+push workload/* ECR repos and WRITE the shared
@@ -92,12 +90,8 @@ module "onboarder" {
     ECR_REGISTRY    = local.ecr_registry
     WORKLOAD_PREFIX = local.workload_repo_prefix
     MODELS_S3_URI   = local.models_s3_uri
-    # Discovery beacons only — the onboard job itself never touches the batch buckets.
-    # Workload tooling reads the CodeBuild env to find cluster buckets without jd state.
-    BATCH_INTAKE_S3_URI = local.batch_intake_s3_uri
-    BATCH_OUTPUT_S3_URI = local.batch_output_s3_uri
-    REHOST_IN           = local.rehost_in_s3_uri
-    REHOST_OUT          = local.rehost_out_s3_uri
+    REHOST_IN       = local.rehost_in_s3_uri
+    REHOST_OUT      = local.rehost_out_s3_uri
     # Tags applied to every workload/* ECR repo the job creates (same tag set as all other
     # deployment resources) — so the repos are attributable + reapable by DeploymentId.
     # JSON-encoded map; onboarder.py decodes it into `aws ecr create-repository --tags`.

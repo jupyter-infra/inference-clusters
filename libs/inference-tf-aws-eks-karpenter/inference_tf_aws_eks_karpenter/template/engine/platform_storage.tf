@@ -22,7 +22,7 @@ module "model_store" {
 locals {
   # Key-prefix convention inside the model-store bucket (no resources — just documented
   # layout). models/ = weights (written by onboarder); rehost/ = onboarder artifacts.
-  # Batch data never lands here — it lives in the dedicated batch_store bucket below.
+  # Batch data never lands here — it lives in the dedicated batch buckets below.
   model_store_models_prefix = "models"
 }
 
@@ -62,6 +62,7 @@ resource "aws_iam_role_policy" "node_s3" {
 # Intake and output are SEPARATE buckets: requests flow into batch_intake, workers
 # publish results and run summaries (metrics/) to batch_output. The bucket boundary
 # makes each data flow one-directional and lets retention/lifecycle rules differ.
+# A lifecycle rule on each bucket removes batch artifacts after 90 days.
 module "batch_intake" {
   source = "./modules/s3_bucket"
 
@@ -74,6 +75,56 @@ module "batch_output" {
 
   bucket_name_prefix = "${local.resource_name_prefix}-batch-out"
   combined_tags      = local.combined_tags
+}
+
+# Batch data is transient: lifecycle rules delete current objects after 90 days,
+# delete noncurrent versions 90 days after they become noncurrent, and abort
+# incomplete multipart uploads after 7 days. The model store has no expiration
+# rule — weights stay until the onboarder or the operator removes them.
+resource "aws_s3_bucket_lifecycle_configuration" "batch_intake" {
+  bucket = module.batch_intake.bucket_name
+
+  rule {
+    id     = "expire-batch-data"
+    status = "Enabled"
+
+    filter {}
+
+    expiration {
+      days = 90
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "batch_output" {
+  bucket = module.batch_output.bucket_name
+
+  rule {
+    id     = "expire-batch-data"
+    status = "Enabled"
+
+    filter {}
+
+    expiration {
+      days = 90
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
 }
 
 # Bespoke node-role grant for the batch buckets: full object lifecycle (get, put,

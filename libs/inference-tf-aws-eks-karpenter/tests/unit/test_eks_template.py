@@ -265,6 +265,17 @@ def test_batch_intake_and_output_are_dedicated_buckets() -> None:
         assert suffix in block and "resource_name_prefix" in block
 
 
+def test_batch_buckets_expire_current_and_noncurrent_objects() -> None:
+    """Each batch bucket MUST remove current and noncurrent objects after 90 days."""
+    content = (ENGINE / "platform_storage.tf").read_text()
+    for bucket in ("batch_intake", "batch_output"):
+        block = _resource(content, "aws_s3_bucket_lifecycle_configuration", bucket)
+        assert f"module.{bucket}.bucket_name" in block
+        assert "days = 90" in block
+        assert "noncurrent_days = 90" in block
+        assert "days_after_initiation = 7" in block
+
+
 def test_node_batch_s3_grant_scoped_to_batch_prefixes() -> None:
     """The batch grant MUST cover the object lifecycle ONLY on the batch buckets, never `*`."""
     content = (ENGINE / "platform_storage.tf").read_text()
@@ -285,6 +296,15 @@ def test_onboarder_iam_scopes_workload_ecr_and_bucket() -> None:
     assert "s3:PutObject" in doc and "module.model_store.bucket_arn" in doc
     assert '"*"' not in doc, "onboard IAM must never use Resource '*'"
     assert "AmazonS3ReadOnlyAccess" in content, "weight-source reads come from the managed policy"
+
+
+def test_onboarder_does_not_depend_on_batch_storage() -> None:
+    """The onboard job MUST not receive batch bucket names or permissions."""
+    content = (ENGINE / "onboarder.tf").read_text()
+    assert "module.batch_intake" not in content
+    assert "module.batch_output" not in content
+    assert "BATCH_INTAKE_S3_URI" not in content
+    assert "BATCH_OUTPUT_S3_URI" not in content
 
 
 # --- Control-loop placement + HA (system MNG, leader-elected → 2 replicas) ---
