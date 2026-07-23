@@ -24,6 +24,7 @@ import time
 
 import pytest
 from pytest_jupyter_deploy.deployment import EndToEndDeployment
+from pytest_jupyter_deploy.kubernetes.kubectl import run_kubectl
 
 from tests.e2e import _serving_helpers as h
 
@@ -37,7 +38,7 @@ CHILDREN = ("deployment", "service")
 def _child_count() -> int:
     n = 0
     for kind in CHILDREN:
-        r = h.kubectl("get", kind, CR_NAME, "-n", h.NAMESPACE, "--ignore-not-found", "-o", "name", check=False)
+        r = run_kubectl("get", kind, CR_NAME, "-n", h.NAMESPACE, "--ignore-not-found", "-o", "name", check=False)
         if r.stdout.strip():
             n += 1
     return n
@@ -61,20 +62,21 @@ def test_kro_graph_onboards_and_serves_without_helm(e2e_deployment: EndToEndDepl
     try:
         # 2. Apply the emitted graph (NO Helm) -> RGD + generated CRD.
         subprocess.run(["kubectl", "apply", "-f", str(graph)], check=True, capture_output=True, text=True)
-        h.kubectl(
+        run_kubectl(
             "wait",
             "--for=jsonpath={.status.state}=Active",
             f"resourcegraphdefinition/{GRAPH_NAME}",
             "--timeout=120s",
+            check=True,
         )
 
         # 3. kubectl-create the CR -> KRO expands children -> Karpenter GPU -> vLLM serves.
         h.apply_resource(CR_RESOURCE)
-        rollout = h.kubectl(
+        rollout = run_kubectl(
             "rollout", "status", f"deployment/{CR_NAME}", "-n", h.NAMESPACE, "--timeout=1200s", check=False
         )
         if rollout.returncode != 0:
-            desc = h.kubectl("describe", "pods", "-n", h.NAMESPACE, "-l", f"app={CR_NAME}", check=False).stdout
+            desc = run_kubectl("describe", "pods", "-n", h.NAMESPACE, "-l", f"app={CR_NAME}", check=False).stdout
             raise AssertionError(f"KRO-expanded vLLM did not become ready:\n{rollout.stderr}\n{desc[-2000:]}")
         h.assert_on_karpenter_gpu(CR_NAME)
         assert _child_count() == len(CHILDREN), "KRO must expand all children before invoke"
@@ -82,7 +84,7 @@ def test_kro_graph_onboards_and_serves_without_helm(e2e_deployment: EndToEndDepl
         h.invoke_chat(e2e_deployment, CR_NAME)
 
         # 4. kubectl-delete the CR -> KRO cascades the children away.
-        h.kubectl("delete", "servablegraphinference", CR_NAME, "-n", h.NAMESPACE, "--timeout=120s")
+        run_kubectl("delete", "servablegraphinference", CR_NAME, "-n", h.NAMESPACE, "--timeout=120s", check=True)
         cascaded = False
         for _ in range(24):  # up to ~2 min for the cascade
             if _child_count() == 0:
@@ -93,9 +95,9 @@ def test_kro_graph_onboards_and_serves_without_helm(e2e_deployment: EndToEndDepl
         # 5. Deleting the RGD tears down the operator for this kind. (KRO intentionally
         #    LEAVES the generated CRD in place — deleting the RGD does not remove it, so
         #    existing CRs aren't orphaned — verified live; we don't assert its removal.)
-        h.kubectl("delete", "-f", str(graph), "--timeout=120s")
-        rgd = h.kubectl("get", "resourcegraphdefinition", GRAPH_NAME, "--ignore-not-found", "-o", "name", check=False)
+        run_kubectl("delete", "-f", str(graph), "--timeout=120s", check=True)
+        rgd = run_kubectl("get", "resourcegraphdefinition", GRAPH_NAME, "--ignore-not-found", "-o", "name", check=False)
         assert not rgd.stdout.strip(), "the RGD itself must be gone after delete"
     finally:
-        h.kubectl("delete", "servablegraphinference", CR_NAME, "-n", h.NAMESPACE, "--ignore-not-found", check=False)
-        h.kubectl("delete", "-f", str(graph), "--ignore-not-found", check=False)
+        run_kubectl("delete", "servablegraphinference", CR_NAME, "-n", h.NAMESPACE, "--ignore-not-found", check=False)
+        run_kubectl("delete", "-f", str(graph), "--ignore-not-found", check=False)

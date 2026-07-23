@@ -325,9 +325,18 @@ class Runner:
         if self.dry_run:
             return
         subprocess.run(
-            ["skopeo", "copy", "--all", "--preserve-digests", *self.skopeo_extra,
-             f"docker://{src_ref}", f"docker://{dst_tag_ref}"],
-            check=True, capture_output=True, text=True,
+            [
+                "skopeo",
+                "copy",
+                "--all",
+                "--preserve-digests",
+                *self.skopeo_extra,
+                f"docker://{src_ref}",
+                f"docker://{dst_tag_ref}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
         )
 
     def ingest_weights(self, source: str, dst_uri: str, name: str) -> None:

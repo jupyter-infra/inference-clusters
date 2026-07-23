@@ -14,6 +14,10 @@ Scope:
   - Managed add-on CONTROLLER Deployments (coredns, ebs-csi, s3-csi): placement only.
     NOT the DaemonSet parts (vpc-cni, kube-proxy, CSI node plugins, CloudWatch agent) —
     those run on every node by design, Karpenter GPU nodes included.
+  - The kube-prometheus-stack release (operator, kube-state-metrics, Grafana, and the
+    Prometheus/Alertmanager StatefulSet pods): placement only. The tolerate-all
+    node-exporter DaemonSet + GPU-only DCGM are excluded (they run off the system MNG by
+    design).
 
 Non-mutating: reads the base deployment as-is. Marked `full_deployment` (no GPU).
 """
@@ -32,6 +36,17 @@ ALWAYS_ON_OPERATORS = [
     ("kro", "kro"),
     ("keda", "keda"),
 ]
+
+# Always-on monitoring workloads pinned to the system MNG in platform_prometheus.tf. Every
+# kube-prometheus-stack pod (operator Deployment, kube-state-metrics, Grafana, AND the
+# Prometheus/Alertmanager StatefulSet pods) carries the release instance label, so one
+# selector covers the whole release — EXCEPT the node-exporter DaemonSet + DCGM, which run
+# on every / on GPU nodes by design (tolerate-all) and are correctly NOT on the system MNG.
+# node-exporter is filtered out below by excluding its component name.
+MONITORING_RELEASE = ("monitoring", "kube-prometheus-stack")
+# Pods in the monitoring release that legitimately run OFF the system MNG (tolerate-all
+# DaemonSets that must scrape every node, GPU nodes included) — excluded from the check.
+MONITORING_OFF_SYSTEM_SUBSTRINGS = ("node-exporter",)
 
 # (namespace, label selector, description) for the managed add-on CONTROLLER Deployments
 # pinned to the system NG via nodeSelector in eks_addons.tf. DaemonSets (vpc-cni,
@@ -82,3 +97,23 @@ def test_addon_controllers_on_system_mng(
     """Each managed add-on CONTROLLER Deployment is pinned to the system MNG (not just tolerated)."""
     e2e_deployment.ensure_deployed()
     h.assert_pods_by_selector_on_system_mng(namespace, selector, f"{description} controller")
+
+
+@pytest.mark.full_deployment
+def test_monitoring_stack_on_system_mng(
+    e2e_deployment: EndToEndDeployment,
+    kubernetes_cluster_login: None,
+) -> None:
+    """Every kube-prometheus-stack pod (operator, kube-state-metrics, Grafana, and the
+    Prometheus/Alertmanager StatefulSet pods) is pinned to the system MNG — closing the
+    issue #14 gap for the monitoring operator. The tolerate-all node-exporter DaemonSet is
+    excluded: it runs on every node by design (including GPU nodes) and MUST NOT be pinned."""
+    e2e_deployment.ensure_deployed()
+
+    namespace, release = MONITORING_RELEASE
+    h.assert_pods_by_selector_on_system_mng(
+        namespace,
+        f"app.kubernetes.io/instance={release}",
+        f"release {release}",
+        exclude_name_substrings=MONITORING_OFF_SYSTEM_SUBSTRINGS,
+    )

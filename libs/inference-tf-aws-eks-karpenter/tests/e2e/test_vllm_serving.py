@@ -16,6 +16,7 @@ import subprocess
 
 import pytest
 from pytest_jupyter_deploy.deployment import EndToEndDeployment
+from pytest_jupyter_deploy.kubernetes.kubectl import run_kubectl
 
 from tests.e2e import _serving_helpers as h
 
@@ -42,12 +43,14 @@ def test_vllm_qwen_serves_on_karpenter_gpu(e2e_deployment: EndToEndDeployment) -
             text=True,
         )
         # Rollout can take ~10-15 min (node provision + ~15GB weight read + CUDA warmup).
-        rollout = h.kubectl(
+        rollout = run_kubectl(
             "rollout", "status", f"deployment/{RELEASE}", "-n", h.NAMESPACE, "--timeout=1200s", check=False
         )
         if rollout.returncode != 0:
-            pods = h.kubectl("get", "pods", "-n", h.NAMESPACE, "-l", f"app={RELEASE}", "-o", "wide", check=False).stdout
-            desc = h.kubectl("describe", "pods", "-n", h.NAMESPACE, "-l", f"app={RELEASE}", check=False).stdout
+            pods = run_kubectl(
+                "get", "pods", "-n", h.NAMESPACE, "-l", f"app={RELEASE}", "-o", "wide", check=False
+            ).stdout
+            desc = run_kubectl("describe", "pods", "-n", h.NAMESPACE, "-l", f"app={RELEASE}", check=False).stdout
             raise AssertionError(f"vLLM rollout failed:\n{rollout.stderr}\n{pods}\n{desc[-2000:]}")
 
         # The pod must have landed on a Karpenter GPU node.

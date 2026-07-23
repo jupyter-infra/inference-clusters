@@ -18,6 +18,11 @@ output "cluster_endpoint" {
   value       = module.eks_cluster.cluster_endpoint
 }
 
+output "cluster_arn" {
+  description = "ARN of the EKS cluster."
+  value       = module.eks_cluster.cluster_arn
+}
+
 output "cluster_ca_certificate" {
   description = "Base64-encoded CA certificate for the EKS cluster."
   value       = module.eks_cluster.cluster_ca_certificate
@@ -101,6 +106,11 @@ output "kro_namespace" {
 output "karpenter_namespace" {
   description = "Namespace the Karpenter controller (and other kube-system platform add-ons) runs in."
   value       = local.karpenter_namespace
+}
+
+output "kube_system_namespace" {
+  description = "The kube-system namespace (scope for the NVIDIA device-plugin DaemonSet/chart health components)."
+  value       = "kube-system"
 }
 
 output "monitoring_namespace" {

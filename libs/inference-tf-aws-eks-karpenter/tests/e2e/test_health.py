@@ -68,9 +68,17 @@ def test_health_cluster_layer(e2e_deployment: EndToEndDeployment) -> None:
     assert layers[0]["skipped"] is False
 
 
+# GPU-only DaemonSets: on the GPU-less full_deployment cluster they have no node to run on
+# (desired pods = 0), so their DaemonSet status reads Degraded — expected, not a failure.
+# Their `-chart` HelmRelease twins carry the authoritative install-state signal and MUST be
+# healthy. See the manifest components: block + AGENT.md for the rationale.
+_GPU_DAEMONSET_COMPONENTS = {"dcgm-exporter", "nvidia-device-plugin"}
+
+
 @pytest.mark.full_deployment
 def test_health_components_layer(e2e_deployment: EndToEndDeployment) -> None:
-    """--components returns one healthy row per manifest component (all Deployments)."""
+    """--components returns one row per manifest component; all healthy EXCEPT the GPU-only
+    DaemonSets, which read Degraded on a GPU-less cluster (their HelmRelease twins stay healthy)."""
     e2e_deployment.ensure_deployed()
 
     manifest_components = e2e_deployment.get_manifest().get_components()
@@ -87,10 +95,25 @@ def test_health_components_layer(e2e_deployment: EndToEndDeployment) -> None:
 
     for entry in layers:
         assert entry["layer"] == "components"
-        assert entry["status_category"] == "healthy", (
-            f"component '{entry['name']}' not healthy: {entry['status_category']}"
-        )
         assert entry["status"] != ""
+        if entry["name"] in _GPU_DAEMONSET_COMPONENTS:
+            # No GPU node up -> desired=0 -> Degraded. Accept degraded (or healthy if a GPU
+            # node happens to exist); the HelmRelease twin is asserted healthy below.
+            assert entry["status_category"] in ("degraded", "healthy"), (
+                f"GPU DaemonSet '{entry['name']}' unexpected status: {entry['status_category']}"
+            )
+        else:
+            assert entry["status_category"] == "healthy", (
+                f"component '{entry['name']}' not healthy: {entry['status_category']}"
+            )
+
+    # The HelmRelease twins of the GPU DaemonSets must be healthy regardless of GPU nodes.
+    by_name = {entry["name"]: entry for entry in layers}
+    for daemonset in _GPU_DAEMONSET_COMPONENTS:
+        chart = f"{daemonset}-chart"
+        assert by_name[chart]["status_category"] == "healthy", (
+            f"HelmRelease '{chart}' must be healthy (chart install-state), got {by_name[chart]['status_category']}"
+        )
 
 
 @pytest.mark.full_deployment

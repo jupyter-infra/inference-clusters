@@ -34,6 +34,7 @@ import time
 
 import pytest
 from pytest_jupyter_deploy.deployment import EndToEndDeployment
+from pytest_jupyter_deploy.kubernetes.kubectl import run_kubectl
 
 from tests.e2e import _serving_helpers as h
 
@@ -57,7 +58,7 @@ def test_kueue_efa_multinode_gang(
     image = h.client_image(e2e_deployment)
 
     try:
-        h.kubectl("create", "namespace", NAMESPACE, check=False)
+        run_kubectl("create", "namespace", NAMESPACE, check=False)
 
         h.apply_resource(
             "efa-gang-lws.yaml",
@@ -69,7 +70,7 @@ def test_kueue_efa_multinode_gang(
         # Assert Kueue Workload reaches Admitted=True
         admitted = False
         for _ in range(30):
-            result = h.kubectl(
+            result = run_kubectl(
                 "get",
                 "workloads",
                 "-n",
@@ -84,7 +85,7 @@ def test_kueue_efa_multinode_gang(
             time.sleep(10)
 
         if not admitted:
-            workloads = h.kubectl("get", "workloads", "-n", NAMESPACE, "-o", "yaml", check=False).stdout
+            workloads = run_kubectl("get", "workloads", "-n", NAMESPACE, "-o", "yaml", check=False).stdout
             raise AssertionError(
                 f"Kueue Workload never reached Admitted=True for EFA gang\n--- Kueue workloads ---\n{workloads[-3000:]}"
             )
@@ -92,7 +93,7 @@ def test_kueue_efa_multinode_gang(
         # Wait for both pods Running (g6e.24xlarge provisioning can take a few min)
         all_ready = False
         for _ in range(42):  # ~7 min
-            result = h.kubectl(
+            result = run_kubectl(
                 "get",
                 "pods",
                 "-n",
@@ -110,14 +111,14 @@ def test_kueue_efa_multinode_gang(
             time.sleep(10)
 
         if not all_ready:
-            desc = h.kubectl("describe", "pods", "-n", NAMESPACE, "-l", f"app={LWS_NAME}", check=False).stdout
+            desc = run_kubectl("describe", "pods", "-n", NAMESPACE, "-l", f"app={LWS_NAME}", check=False).stdout
             raise AssertionError(
                 f"Expected 2 Running EFA pods, got phases: {phases}\n--- Pod describe ---\n{desc[-2000:]}"
             )
 
         # Assert both pods got an EFA interface allocated (limits reflect the request)
         efa_limits = (
-            h.kubectl(
+            run_kubectl(
                 "get",
                 "pods",
                 "-n",
@@ -126,6 +127,7 @@ def test_kueue_efa_multinode_gang(
                 f"app={LWS_NAME}",
                 "-o",
                 r"jsonpath={.items[*].spec.containers[0].resources.limits.vpc\.amazonaws\.com/efa}",
+                check=True,
             )
             .stdout.strip()
             .split()
@@ -137,7 +139,7 @@ def test_kueue_efa_multinode_gang(
         # g-tier check is what the retired plain-gang test asserted — kept here so
         # this single test still covers the full flavor-injection path.
         nodes = (
-            h.kubectl(
+            run_kubectl(
                 "get",
                 "pods",
                 "-n",
@@ -146,6 +148,7 @@ def test_kueue_efa_multinode_gang(
                 f"app={LWS_NAME}",
                 "-o",
                 "jsonpath={.items[*].spec.nodeName}",
+                check=True,
             )
             .stdout.strip()
             .split()
@@ -153,12 +156,8 @@ def test_kueue_efa_multinode_gang(
         assert len(nodes) == 2, f"Expected 2 scheduled pods, got: {nodes}"
 
         for node in nodes:
-            accelerator = h.kubectl(
-                "get",
-                "node",
-                node,
-                "-o",
-                r"jsonpath={.metadata.labels.inference/accelerator}",
+            accelerator = run_kubectl(
+                "get", "node", node, "-o", r"jsonpath={.metadata.labels.inference/accelerator}", check=True
             ).stdout.strip()
             assert accelerator == "nvidia-g", (
                 f"Pod must run on a g-tier GPU node (gpu-g flavor), "
@@ -167,12 +166,8 @@ def test_kueue_efa_multinode_gang(
 
         zones = []
         for node in nodes:
-            zone = h.kubectl(
-                "get",
-                "node",
-                node,
-                "-o",
-                r"jsonpath={.metadata.labels.topology\.kubernetes\.io/zone}",
+            zone = run_kubectl(
+                "get", "node", node, "-o", r"jsonpath={.metadata.labels.topology\.kubernetes\.io/zone}", check=True
             ).stdout.strip()
             zones.append(zone)
         assert zones[0] == zones[1] and zones[0], (
@@ -181,7 +176,7 @@ def test_kueue_efa_multinode_gang(
 
     finally:
         # Deleting the LWS cascades to owned pods (ownerReferences)
-        h.kubectl(
+        run_kubectl(
             "delete",
             "leaderworkerset",
             LWS_NAME,

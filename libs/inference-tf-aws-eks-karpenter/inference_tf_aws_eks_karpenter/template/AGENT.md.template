@@ -7,7 +7,7 @@ workloads. It uses Terraform as the infrastructure-as-code engine and relies on
 [Karpenter](https://karpenter.sh) for node autoscaling over self-managed nodes.
 
 The template deploys:
-- A VPC with public and private subnets
+- A VPC with private subnets
 - An EKS cluster
 - Karpenter, with NodePools/EC2NodeClasses that provision self-managed nodes on demand
 
@@ -37,9 +37,34 @@ The template deploys:
 For this template the **cluster**, **components**, and **images** layers apply. The
 **load-balancer** and **connection** layers report `skipped` by design: this is an
 endpoints-only VPC with no public ingress or load balancer, so there is no external URL
-to health-check. The components layer covers the Deployment-type platform operators
-(Karpenter, KEDA, the Prometheus operator, Grafana, kube-state-metrics, KRO); the images
-layer confirms each vendored platform image landed in ECR (the air-gapped failure mode).
+to health-check. The components layer covers the platform operators and their supporting
+workloads across four kinds — Deployments (Karpenter, KEDA, the Prometheus operator,
+Grafana, kube-state-metrics, KRO), StatefulSets (Prometheus, Alertmanager), DaemonSets
+(node-exporter and the GPU-only DCGM + NVIDIA device-plugin), and the GPU chart
+HelmReleases; the images layer confirms each vendored platform image landed in ECR (the
+air-gapped failure mode).
+
+**Known false-alarm — GPU DaemonSets on a GPU-less cluster.** The `dcgm-exporter` and
+`nvidia-device-plugin` **DaemonSet** rows run only on GPU nodes, so until Karpenter has
+provisioned a GPU node they report **Degraded** (desired pods = 0). This is expected on
+a base cluster with no GPU workload — the authoritative signal for those two is their
+`-chart` **HelmRelease** row (chart install-state, which stays healthy regardless of
+whether a GPU node is up). Treat a Degraded GPU DaemonSet row as informational when no
+GPU node exists.
+
+### Manage the cluster
+
+{{ eks-cluster-management-instruction }}
+
+### Inspect and operate the platform components
+
+{{ kubernetes-component-management-instructions }}
+
+### Inspect the vendored platform images
+
+{{ image-management-instructions }}
+
+{{ aws-inspector-scanning }}
 
 ### Delete all the resources
 

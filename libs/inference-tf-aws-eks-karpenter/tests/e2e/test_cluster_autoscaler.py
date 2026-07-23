@@ -10,10 +10,14 @@ whose CPU requests, spread one-per-node, exceed the free capacity on the current
 nodes → the surplus pods go Pending → CA grows the tagged system ASG → new node(s) join →
 pods schedule. We assert the system-node count rises (bounded by bootstrap_max_size).
 
+The ballast Deployment is created by the pytest-jupyter-deploy `ballast_deployment` helper
+(a context manager that renders the one-per-node topology-spread + sleeper pods and deletes
+them on exit), so this test only supplies the placement/sizing and the poll loop.
+
 Scope: scale-UP only. Scale-down is deliberately NOT tested — CA's default
 scale-down-unneeded-time is 10 min and system-cluster-critical pods / PDBs can legitimately
-block it, so a scale-down assertion is slow and flaky. Deleting the ballast (in finally)
-lets the cluster return to its floor on its own afterward.
+block it, so a scale-down assertion is slow and flaky. The context manager deletes the
+ballast on exit, letting the cluster return to its floor on its own afterward.
 
 Marked `full_deployment` — grows the ASG on a live cluster (no GPU needed); self-reverts by
 deleting the ballast.
@@ -24,11 +28,18 @@ import time
 
 import pytest
 from pytest_jupyter_deploy.deployment import EndToEndDeployment
+from pytest_jupyter_deploy.kubernetes.ballast import ballast_deployment
+from pytest_jupyter_deploy.kubernetes.kubectl import run_kubectl
 
 from tests.e2e import _serving_helpers as h
 
 NAMESPACE = "default"
 BALLAST_APP = "ca-ballast"
+
+# The system MNG's taint (inference/role=system:NoSchedule) — the ballast must tolerate it
+# AND nodeSelect the same label, so it lands on (and only grows) the system pool.
+_SYSTEM_NODE_SELECTOR = {"inference/role": "system"}
+_SYSTEM_TOLERATION = {"key": "inference/role", "operator": "Equal", "value": "system", "effect": "NoSchedule"}
 
 
 @pytest.mark.full_deployment
@@ -50,15 +61,15 @@ def test_cluster_autoscaler_scales_up_system_mng(
     cpu_request = f"{math.floor(per_node_cpu * 0.6)}m"
     replicas = start_count + 1
 
-    try:
-        h.apply_resource(
-            "system-ballast.yaml",
-            image=h.client_image(e2e_deployment),
-            namespace=NAMESPACE,
-            replicas=str(replicas),
-            cpu_request=cpu_request,
-        )
-
+    with ballast_deployment(
+        name=BALLAST_APP,
+        namespace=NAMESPACE,
+        image=h.client_image(e2e_deployment),
+        replicas=replicas,
+        cpu_request=cpu_request,
+        node_selector=_SYSTEM_NODE_SELECTOR,
+        tolerations=[_SYSTEM_TOLERATION],
+    ):
         # CA scan interval + node provision + join: poll up to ~8 min for the node count
         # to exceed the starting count (bounded above by bootstrap_max_size).
         grew = False
@@ -71,10 +82,10 @@ def test_cluster_autoscaler_scales_up_system_mng(
             time.sleep(10)
 
         if not grew:
-            pending = h.kubectl(
+            pending = run_kubectl(
                 "get", "pods", "-n", NAMESPACE, "-l", f"app={BALLAST_APP}", "-o", "wide", check=False
             ).stdout
-            ca_logs = h.kubectl(
+            ca_logs = run_kubectl(
                 "logs",
                 "-n",
                 "kube-system",
@@ -89,6 +100,4 @@ def test_cluster_autoscaler_scales_up_system_mng(
                 f"(still {current}) — CA did not scale up the tagged ASG.\n"
                 f"--- ballast pods ---\n{pending}\n--- CA logs ---\n{ca_logs[-2000:]}"
             )
-    finally:
-        # Remove the ballast; the ASG returns to its floor on its own afterward.
-        h.kubectl("delete", "deployment", BALLAST_APP, "-n", NAMESPACE, "--ignore-not-found", check=False)
+    # The context manager deletes the ballast; the ASG returns to its floor on its own after.

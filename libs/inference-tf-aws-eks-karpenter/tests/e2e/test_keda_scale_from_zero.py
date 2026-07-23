@@ -25,6 +25,7 @@ import time
 
 import pytest
 from pytest_jupyter_deploy.deployment import EndToEndDeployment
+from pytest_jupyter_deploy.kubernetes.kubectl import run_kubectl
 
 from tests.e2e import _serving_helpers as h
 
@@ -35,7 +36,7 @@ ROUTER_CM = "keda-router-script"
 
 
 def _replicas(release: str) -> int:
-    r = h.kubectl("get", "deployment", release, "-n", h.NAMESPACE, "-o", "jsonpath={.spec.replicas}", check=False)
+    r = run_kubectl("get", "deployment", release, "-n", h.NAMESPACE, "-o", "jsonpath={.spec.replicas}", check=False)
     return int(r.stdout.strip() or "0")
 
 
@@ -50,7 +51,7 @@ def _wait_settled_at_zero(release: str, *, stable_reads: int = 3, interval_s: in
       2. a stable window — `stable_reads` consecutive zero reads, so a still-settling
          count that momentarily reads 0 does not pass prematurely.
     """
-    ready = h.kubectl(
+    ready = run_kubectl(
         "wait",
         "--for=condition=Ready",
         f"scaledobject/{release}",
@@ -98,13 +99,15 @@ def test_keda_scales_vllm_from_zero_via_router(e2e_deployment: EndToEndDeploymen
         # 2. Deploy the always-on router. Its script is delivered via a ConfigMap built
         #    from router.py (the file stays the single source of truth), and it targets
         #    the vLLM Service. Pinning it to gpu-g keeps a node warm for the scale event.
-        h.kubectl("create", "configmap", ROUTER_CM, "-n", h.NAMESPACE, f"--from-file=router.py={ROUTER_SCRIPT}")
+        run_kubectl(
+            "create", "configmap", ROUTER_CM, "-n", h.NAMESPACE, f"--from-file=router.py={ROUTER_SCRIPT}", check=True
+        )
         h.apply_resource(
             "router.yaml",
             router_image=h.python_image(e2e_deployment),
             backend_url=f"http://{RELEASE}.{h.NAMESPACE}.svc:8000",
         )
-        h.kubectl("rollout", "status", "deployment/keda-router", "-n", h.NAMESPACE, "--timeout=300s")
+        run_kubectl("rollout", "status", "deployment/keda-router", "-n", h.NAMESPACE, "--timeout=300s", check=True)
 
         # 3. Apply the ScaledObject (minReplicaCount=0, scales on router_inflight_requests).
         h.apply_resource("vllm-scaledobject.yaml", target=RELEASE)
@@ -128,11 +131,11 @@ def test_keda_scales_vllm_from_zero_via_router(e2e_deployment: EndToEndDeploymen
         assert scaled_up, "KEDA must scale vLLM 0->1 once a held request pushes router_inflight_requests over threshold"
 
         # The scaled-up pod bin-packs onto the warm g node; vLLM loads weights + serves.
-        rollout = h.kubectl(
+        rollout = run_kubectl(
             "rollout", "status", f"deployment/{RELEASE}", "-n", h.NAMESPACE, "--timeout=1200s", check=False
         )
         if rollout.returncode != 0:
-            desc = h.kubectl("describe", "pods", "-n", h.NAMESPACE, "-l", f"app={RELEASE}", check=False).stdout
+            desc = run_kubectl("describe", "pods", "-n", h.NAMESPACE, "-l", f"app={RELEASE}", check=False).stdout
             raise AssertionError(f"scaled-up vLLM did not become ready:\n{rollout.stderr}\n{desc[-2000:]}")
         h.assert_on_karpenter_gpu(RELEASE)
 
@@ -149,10 +152,10 @@ def test_keda_scales_vllm_from_zero_via_router(e2e_deployment: EndToEndDeploymen
         assert scaled_down, "KEDA must scale vLLM back to 0 after the in-flight metric drops to 0"
     finally:
         # Delete by kind/name (router.yaml carries ${...} placeholders kubectl can't parse).
-        h.kubectl("delete", "pod", "keda-client", "-n", h.NAMESPACE, "--ignore-not-found", check=False)
-        h.kubectl("delete", "scaledobject", RELEASE, "-n", h.NAMESPACE, "--ignore-not-found", check=False)
-        h.kubectl("delete", "servicemonitor", "keda-router", "-n", h.NAMESPACE, "--ignore-not-found", check=False)
-        h.kubectl("delete", "service", "keda-router", "-n", h.NAMESPACE, "--ignore-not-found", check=False)
-        h.kubectl("delete", "deployment", "keda-router", "-n", h.NAMESPACE, "--ignore-not-found", check=False)
-        h.kubectl("delete", "configmap", ROUTER_CM, "-n", h.NAMESPACE, "--ignore-not-found", check=False)
+        run_kubectl("delete", "pod", "keda-client", "-n", h.NAMESPACE, "--ignore-not-found", check=False)
+        run_kubectl("delete", "scaledobject", RELEASE, "-n", h.NAMESPACE, "--ignore-not-found", check=False)
+        run_kubectl("delete", "servicemonitor", "keda-router", "-n", h.NAMESPACE, "--ignore-not-found", check=False)
+        run_kubectl("delete", "service", "keda-router", "-n", h.NAMESPACE, "--ignore-not-found", check=False)
+        run_kubectl("delete", "deployment", "keda-router", "-n", h.NAMESPACE, "--ignore-not-found", check=False)
+        run_kubectl("delete", "configmap", ROUTER_CM, "-n", h.NAMESPACE, "--ignore-not-found", check=False)
         subprocess.run(["helm", "uninstall", RELEASE, "-n", h.NAMESPACE], check=False, capture_output=True)

@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 
 from pytest_jupyter_deploy.deployment import EndToEndDeployment
+from pytest_jupyter_deploy.kubernetes import nodes
+from pytest_jupyter_deploy.kubernetes.kubectl import run_kubectl
 
 CHARTS_DIR = Path(__file__).resolve().parent / "charts"  # Path-A Helm chart fixtures
 GRAPHS_DIR = Path(__file__).resolve().parent / "graphs"  # Path-B KRO graph fixtures (no Chart.yaml)
@@ -81,10 +83,6 @@ def workload_image_repo(e2e: EndToEndDeployment, image_suffix: str = WORKLOAD_IM
     return f"{prefix}/{image}"
 
 
-def kubectl(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["kubectl", *args], check=check, capture_output=True, text=True)
-
-
 def aws_cli(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     """Run an AWS CLI command on the test host."""
     return subprocess.run(["aws", *args], check=check, capture_output=True, text=True)
@@ -92,7 +90,7 @@ def aws_cli(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
 
 def exec_in_pod(namespace: str, pod: str, *command: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     """Run a command in a pod."""
-    return kubectl("exec", pod, "-n", namespace, "--", *command, check=check)
+    return run_kubectl("exec", pod, "-n", namespace, "--", *command, check=check)
 
 
 def assert_pod_command_denied(namespace: str, pod: str, *command: str) -> None:
@@ -272,6 +270,41 @@ def python_image(e2e: EndToEndDeployment) -> str:
     return f"{registry}/ecr-public/docker/library/python:3.12-slim"
 
 
+def _chat_prompt(model: str) -> str:
+    """The tiny deterministic OpenAI chat request both invoke helpers POST (max_tokens=16)."""
+    return json.dumps(
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": "Reply with exactly the word: pong"}],
+            "max_tokens": 16,
+            "temperature": 0,
+        }
+    )
+
+
+def _retry_invoke_script(url: str, prompt: str, attempts: int, read_timeout_s: int, backoff_s: int) -> str:
+    """A busybox-sh client script that POSTs `prompt` to `url`, RETRYING until it sees a
+    completion (a body containing "choices") or `attempts` runs out.
+
+    The retry loop is the anti-flake: vLLM can reject/reset/hang the first request(s) during
+    cold start even after its rollout reports ready (first-token KV-cache init / CUDA graph
+    capture). Each attempt gets a `-T read_timeout_s` so one held request can ride out a slow
+    first token; on any non-completion (connection refused/reset, empty body, error status)
+    it backs off `backoff_s` and tries again. Exits 0 on the first completion, 1 if the whole
+    budget (~attempts * (read_timeout tail + backoff)) elapses without one."""
+    return (
+        "i=0; "
+        f"while [ $i -lt {attempts} ]; do "
+        f"  r=$(wget -q -O- -T {read_timeout_s} --post-data='{prompt}' "
+        f'    --header="Content-Type: application/json" {url}); '
+        '  case "$r" in *choices*) echo "$r"; exit 0 ;; esac; '
+        '  echo "[client] attempt $i: no completion yet, retrying" 1>&2; '
+        f"  i=$((i+1)); sleep {backoff_s}; "
+        "done; "
+        'echo "[client] gave up after retries" 1>&2; exit 1'
+    )
+
+
 def launch_blocking_invoke(e2e: EndToEndDeployment, service: str, port: int, model: str = "qwen2.5-7b") -> None:
     """Start a busybox client that POSTs /v1/chat/completions and BLOCKS on the response.
 
@@ -280,38 +313,16 @@ def launch_blocking_invoke(e2e: EndToEndDeployment, service: str, port: int, mod
     (the router holds the connection through the vLLM cold start). Collect it later with
     collect_blocking_invoke.
 
-    The client SOFT-FAILS and RETRIES: the router pod may not be ready when busybox
-    starts, and a long-held connection can be reset mid-cold-start. So we loop — each
-    attempt gives the router a long read timeout; on any non-completion (connection
-    refused/reset, empty body, error status) we sleep and retry until a response with
-    "choices" arrives or the overall budget elapses. The retries are what drive the
-    router's in-flight gauge repeatedly, which is exactly what KEDA needs to see.
+    The client SOFT-FAILS and RETRIES (see _retry_invoke_script): the router pod may not be
+    ready when busybox starts, and a long-held connection can be reset mid-cold-start. The
+    retries are also what drive the router's in-flight gauge repeatedly, which is exactly
+    what KEDA needs to see. Budget ~28 min (85 x 20s attempts), -T 1200 per held attempt.
     """
-    prompt = json.dumps(
-        {
-            "model": model,
-            "messages": [{"role": "user", "content": "Reply with exactly the word: pong"}],
-            "max_tokens": 16,
-            "temperature": 0,
-        }
-    )
+    prompt = _chat_prompt(model)
     url = f"http://{service}.{NAMESPACE}.svc:{port}/v1/chat/completions"
-    # Retry loop in the client: keep hitting the router until we get a real completion or
-    # the budget (~28 min of 20s attempts) runs out. -T 1200 lets a single held attempt
-    # ride out the vLLM cold start; on failure we back off 20s and try again.
-    script = (
-        "i=0; "
-        "while [ $i -lt 85 ]; do "
-        f"  r=$(wget -q -O- -T 1200 --post-data='{prompt}' "
-        f'    --header="Content-Type: application/json" {url}); '
-        '  case "$r" in *choices*) echo "$r"; exit 0 ;; esac; '
-        '  echo "[client] attempt $i: no completion yet, retrying" 1>&2; '
-        "  i=$((i+1)); sleep 20; "
-        "done; "
-        'echo "[client] gave up after retries" 1>&2; exit 1'
-    )
-    kubectl("delete", "pod", "keda-client", "-n", NAMESPACE, "--ignore-not-found", check=False)
-    kubectl(
+    script = _retry_invoke_script(url, prompt, attempts=85, read_timeout_s=1200, backoff_s=20)
+    run_kubectl("delete", "pod", "keda-client", "-n", NAMESPACE, "--ignore-not-found", check=False)
+    run_kubectl(
         "run",
         "keda-client",
         "-n",
@@ -322,27 +333,29 @@ def launch_blocking_invoke(e2e: EndToEndDeployment, service: str, port: int, mod
         "sh",
         "-c",
         script,
+        check=True,
     )
 
 
 def collect_blocking_invoke(timeout_s: int = 1200) -> dict:
     """Wait for the launch_blocking_invoke client to Succeed, assert a completion, clean up."""
     try:
-        kubectl(
+        run_kubectl(
             "wait",
             "--for=jsonpath={.status.phase}=Succeeded",
             "pod/keda-client",
             "-n",
             NAMESPACE,
             f"--timeout={timeout_s}s",
+            check=True,
         )
-        out = kubectl("logs", "keda-client", "-n", NAMESPACE).stdout
+        out = run_kubectl("logs", "keda-client", "-n", NAMESPACE, check=True).stdout
         assert '"choices"' in out, f"expected an OpenAI completion through the router, got:\n{out}"
         body = json.loads(out[out.index("{") :])
         assert body["choices"][0]["message"]["content"].strip(), f"completion must be non-empty, got {body!r}"
         return body
     finally:
-        kubectl("delete", "pod", "keda-client", "-n", NAMESPACE, "--ignore-not-found", check=False)
+        run_kubectl("delete", "pod", "keda-client", "-n", NAMESPACE, "--ignore-not-found", check=False)
 
 
 def invoke_chat(e2e: EndToEndDeployment, service: str, model: str = "qwen2.5-7b") -> dict:
@@ -350,18 +363,18 @@ def invoke_chat(e2e: EndToEndDeployment, service: str, model: str = "qwen2.5-7b"
 
     Uses busybox+wget over the ClusterIP Service (in-cluster), the only reachable path on
     the endpoints-only VPC. Asserts a non-empty completion.
+
+    The client RETRIES (shared _retry_invoke_script) rather than firing one shot: even after
+    `helm rollout status` reports the Deployment ready, vLLM's FIRST request can reset/hang
+    during cold start (first-token KV-cache init / CUDA graph capture) — a one-shot wget
+    here was the flake that failed this test intermittently. Budget ~10 min (30 x 8s waits +
+    a 300s per-attempt read tail); the pod-wait timeout tracks that budget with headroom.
     """
-    prompt = json.dumps(
-        {
-            "model": model,
-            "messages": [{"role": "user", "content": "Reply with exactly the word: pong"}],
-            "max_tokens": 16,
-            "temperature": 0,
-        }
-    )
+    prompt = _chat_prompt(model)
     url = f"http://{service}.{NAMESPACE}.svc:8000/v1/chat/completions"
-    kubectl("delete", "pod", "vllm-client", "-n", NAMESPACE, "--ignore-not-found", check=False)
-    kubectl(
+    script = _retry_invoke_script(url, prompt, attempts=30, read_timeout_s=300, backoff_s=8)
+    run_kubectl("delete", "pod", "vllm-client", "-n", NAMESPACE, "--ignore-not-found", check=False)
+    run_kubectl(
         "run",
         "vllm-client",
         "-n",
@@ -371,28 +384,35 @@ def invoke_chat(e2e: EndToEndDeployment, service: str, model: str = "qwen2.5-7b"
         "--",
         "sh",
         "-c",
-        f"wget -q -O- --post-data='{prompt}' --header=\"Content-Type: application/json\" {url}",
+        script,
+        check=True,
     )
     try:
-        kubectl(
-            "wait", "--for=jsonpath={.status.phase}=Succeeded", "pod/vllm-client", "-n", NAMESPACE, "--timeout=120s"
+        run_kubectl(
+            "wait",
+            "--for=jsonpath={.status.phase}=Succeeded",
+            "pod/vllm-client",
+            "-n",
+            NAMESPACE,
+            "--timeout=720s",
+            check=True,
         )
-        out = kubectl("logs", "vllm-client", "-n", NAMESPACE).stdout
+        out = run_kubectl("logs", "vllm-client", "-n", NAMESPACE, check=True).stdout
         assert '"choices"' in out, f"expected an OpenAI completion, got:\n{out}"
         body = json.loads(out[out.index("{") :])
         content = body["choices"][0]["message"]["content"]
         assert content.strip(), f"completion content must be non-empty, got {body!r}"
         return body
     finally:
-        kubectl("delete", "pod", "vllm-client", "-n", NAMESPACE, "--ignore-not-found", check=False)
+        run_kubectl("delete", "pod", "vllm-client", "-n", NAMESPACE, "--ignore-not-found", check=False)
 
 
 def assert_on_karpenter_gpu(release: str, accelerator: str = "nvidia-g") -> str:
     """Assert the release's pod landed on a Karpenter GPU node; return the node name."""
-    node = kubectl(
-        "get", "pods", "-n", NAMESPACE, "-l", f"app={release}", "-o", "jsonpath={.items[0].spec.nodeName}"
+    node = run_kubectl(
+        "get", "pods", "-n", NAMESPACE, "-l", f"app={release}", "-o", "jsonpath={.items[0].spec.nodeName}", check=True
     ).stdout.strip()
-    labels = kubectl("get", "node", node, "-o", "jsonpath={.metadata.labels}").stdout
+    labels = run_kubectl("get", "node", node, "-o", "jsonpath={.metadata.labels}", check=True).stdout
     assert accelerator in labels, f"pod must run on a Karpenter {accelerator} node, got {node} labels {labels}"
     return node
 
@@ -404,7 +424,7 @@ def deployment_names_by_instance(namespace: str, helm_release: str) -> list[str]
     hardcoded — chart fullname logic varies (e.g. cluster-autoscaler renders
     'cluster-autoscaler-aws-cluster-autoscaler'), and a wrong literal name is exactly the
     silent-miss class that hides a broken replica/nodeSelector key."""
-    out = kubectl(
+    out = run_kubectl(
         "get",
         "deployments",
         "-n",
@@ -424,9 +444,11 @@ def assert_deployment_replicas_ready(namespace: str, deployment: str, expected: 
     Reading BOTH .spec.replicas and .status.readyReplicas is the point: .spec proves the
     chart honored our replica key (a phantom key would leave it at the chart default), and
     .status proves the standbys actually scheduled on the system MNG (not stuck Pending)."""
-    spec = kubectl("get", "deployment", deployment, "-n", namespace, "-o", "jsonpath={.spec.replicas}").stdout.strip()
-    ready = kubectl(
-        "get", "deployment", deployment, "-n", namespace, "-o", "jsonpath={.status.readyReplicas}"
+    spec = run_kubectl(
+        "get", "deployment", deployment, "-n", namespace, "-o", "jsonpath={.spec.replicas}", check=True
+    ).stdout.strip()
+    ready = run_kubectl(
+        "get", "deployment", deployment, "-n", namespace, "-o", "jsonpath={.status.readyReplicas}", check=True
     ).stdout.strip()
     assert spec == str(expected), f"{namespace}/{deployment} .spec.replicas={spec}, expected {expected}"
     assert ready == str(expected), (
@@ -436,18 +458,7 @@ def assert_deployment_replicas_ready(namespace: str, deployment: str, expected: 
 
 def system_node_names() -> list[str]:
     """Names of the Ready system-MNG nodes (inference/role=system label)."""
-    out = kubectl(
-        "get", "nodes", "-l", "inference/role=system", "-o", "jsonpath={.items[*].metadata.name}", check=False
-    ).stdout.strip()
-    return out.split() if out else []
-
-
-def _parse_cpu_to_millicores(quantity: str) -> int:
-    """Parse a k8s CPU quantity ('2', '1930m') to integer millicores."""
-    quantity = quantity.strip()
-    if quantity.endswith("m"):
-        return int(quantity[:-1])
-    return int(float(quantity) * 1000)
+    return nodes.get_node_names("inference/role=system")
 
 
 def system_node_allocatable_cpu_millicores() -> int:
@@ -456,26 +467,54 @@ def system_node_allocatable_cpu_millicores() -> int:
     Ballast CPU requests are derived from this so the scale-up test isn't hardcoded to a
     specific instance type (a fixed request would either never trigger scale-up on a large
     SKU or over-trigger on a small one)."""
-    nodes = system_node_names()
-    assert nodes, "no system-MNG nodes found (inference/role=system)"
-    cpu = kubectl("get", "node", nodes[0], "-o", "jsonpath={.status.allocatable.cpu}").stdout.strip()
-    return _parse_cpu_to_millicores(cpu)
+    system_nodes = system_node_names()
+    assert system_nodes, "no system-MNG nodes found (inference/role=system)"
+    return nodes.get_node_allocatable_cpu_millicores(system_nodes[0])
 
 
-def assert_pods_by_selector_on_system_mng(namespace: str, selector: str, description: str) -> None:
+def assert_pods_by_selector_on_system_mng(
+    namespace: str, selector: str, description: str, exclude_name_substrings: tuple[str, ...] = ()
+) -> None:
     """Assert every pod matching a label selector runs on a tainted system-MNG node.
 
     System nodes carry inference/role=system; Karpenter inference nodes do not. A control
     -loop / addon-controller pod drifting off the system MNG (missing nodeSelector) is a
-    silent placement regression the deployment succeeding would not catch."""
-    nodes = (
-        kubectl("get", "pods", "-n", namespace, "-l", selector, "-o", "jsonpath={.items[*].spec.nodeName}")
-        .stdout.strip()
-        .split()
-    )
-    assert nodes, f"no pods found for {description} ({selector}) in {namespace}"
-    for node in set(nodes):
-        labels = kubectl("get", "node", node, "-o", "jsonpath={.metadata.labels}").stdout
+    silent placement regression the deployment succeeding would not catch.
+
+    Reads each pod's name + .spec.nodeName as pairs (not just the node list) so a pod stuck
+    Pending — nodeName empty — is caught as a failure rather than silently skipped: an
+    unschedulable controller is exactly the mis-placement (bad nodeSelector/taint) this
+    guards against (issue #14).
+
+    exclude_name_substrings drops pods whose name contains any of the substrings — used for
+    releases that legitimately mix system-pinned pods with tolerate-all DaemonSets (e.g.
+    kube-prometheus-stack's node-exporter, which MUST run on every node)."""
+    # name,nodeName per pod: a Pending pod yields "name," (empty nodeName) — an explicit fail.
+    raw = run_kubectl(
+        "get",
+        "pods",
+        "-n",
+        namespace,
+        "-l",
+        selector,
+        "-o",
+        r"jsonpath={range .items[*]}{.metadata.name},{.spec.nodeName}{'\n'}{end}",
+        check=True,
+    ).stdout.strip()
+    pods = [
+        (name, node)
+        for line in raw.splitlines()
+        if line
+        for name, _, node in [line.partition(",")]
+        if not any(sub in name for sub in exclude_name_substrings)
+    ]
+    assert pods, f"no pods found for {description} ({selector}) in {namespace}"
+
+    pending = [name for name, node in pods if not node]
+    assert not pending, f"{description} pod(s) {pending} are Pending (unschedulable) — not on the system MNG"
+
+    for _, node in pods:
+        labels = run_kubectl("get", "node", node, "-o", "jsonpath={.metadata.labels}", check=True).stdout
         assert '"inference/role":"system"' in labels, (
             f"{description} pod on {node} is NOT on the system MNG (labels: {labels[:200]})"
         )

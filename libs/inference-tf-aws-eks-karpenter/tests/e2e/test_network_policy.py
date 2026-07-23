@@ -22,6 +22,7 @@ import time
 
 import pytest
 from pytest_jupyter_deploy.deployment import EndToEndDeployment
+from pytest_jupyter_deploy.kubernetes.kubectl import run_kubectl
 from pytest_jupyter_deploy.kubernetes.namespace import delete_namespace, temporary_namespace
 
 from tests.e2e import _serving_helpers as h
@@ -41,7 +42,7 @@ _CONNECT_TIMEOUT_S = 8
 def _apply_target(image: str) -> None:
     """Stand up the httpd target Pod + Service and wait for it to be Ready."""
     h.apply_resource("netpol-target.yaml", TARGET_NS=TARGET_NS, TARGET_IMAGE=image)
-    h.kubectl("wait", "--for=condition=Ready", "pod/netpol-target", "-n", TARGET_NS, "--timeout=120s")
+    run_kubectl("wait", "--for=condition=Ready", "pod/netpol-target", "-n", TARGET_NS, "--timeout=120s", check=True)
 
 
 def _probe_target(image: str, *, labeled: bool) -> bool:
@@ -57,8 +58,8 @@ def _probe_target(image: str, *, labeled: bool) -> bool:
     if labeled:
         overrides["metadata"] = {"labels": ALLOWED_LABEL}
 
-    h.kubectl("delete", "pod", pod, "-n", TARGET_NS, "--ignore-not-found", "--wait=false", check=False)
-    h.kubectl(
+    run_kubectl("delete", "pod", pod, "-n", TARGET_NS, "--ignore-not-found", "--wait=false", check=False)
+    run_kubectl(
         "run",
         pod,
         "-n",
@@ -76,6 +77,7 @@ def _probe_target(image: str, *, labeled: bool) -> bool:
         "-T",
         str(_CONNECT_TIMEOUT_S),
         url,
+        check=True,
     )
     try:
         # Poll the container's OWN terminated exit code (kubectl run's rc is unreliable).
@@ -87,14 +89,16 @@ def _probe_target(image: str, *, labeled: bool) -> bool:
         deadline = time.monotonic() + 90
         code = ""
         while time.monotonic() < deadline:
-            code = h.kubectl("get", "pod", pod, "-n", TARGET_NS, "-o", f"jsonpath={jsonpath}").stdout.strip()
+            code = run_kubectl(
+                "get", "pod", pod, "-n", TARGET_NS, "-o", f"jsonpath={jsonpath}", check=True
+            ).stdout.strip()
             if code != "":
                 break
             time.sleep(2)
         assert code != "", f"probe pod '{pod}' did not terminate within 90s"
         return int(code) == 0
     finally:
-        h.kubectl("delete", "pod", pod, "-n", TARGET_NS, "--ignore-not-found", "--wait=false", check=False)
+        run_kubectl("delete", "pod", pod, "-n", TARGET_NS, "--ignore-not-found", "--wait=false", check=False)
 
 
 @pytest.mark.full_deployment
@@ -112,7 +116,7 @@ def test_network_policy_is_enforced(e2e_deployment: EndToEndDeployment, kubernet
     # temporary_namespace deletes with --wait=false, so a prior run's namespace may still
     # be Terminating; delete-and-wait first so the create below never hits AlreadyExists.
     delete_namespace(TARGET_NS)
-    h.kubectl("wait", "--for=delete", f"namespace/{TARGET_NS}", "--timeout=120s", check=False)
+    run_kubectl("wait", "--for=delete", f"namespace/{TARGET_NS}", "--timeout=120s", check=False)
 
     with temporary_namespace(TARGET_NS):
         _apply_target(image)

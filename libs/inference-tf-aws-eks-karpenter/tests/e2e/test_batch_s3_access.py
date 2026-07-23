@@ -43,7 +43,7 @@ def test_batch_pod_identity_access(
 
     h.aws_cli("s3api", "put-object", "--bucket", intake_bucket, "--key", input_key, "--body", str(payload))
     h.aws_cli("s3api", "put-object", "--bucket", model_store_bucket, "--key", model_store_key, "--body", str(payload))
-    h.kubectl("delete", "pod", POD_NAME, "-n", namespace, "--ignore-not-found", "--wait=false", check=False)
+    h.run_kubectl("delete", "pod", POD_NAME, "-n", namespace, "--ignore-not-found", "--wait=false", check=False)
 
     try:
         h.apply_resource(
@@ -53,9 +53,9 @@ def test_batch_pod_identity_access(
             CONFIG_MAP=config_map,
             AWS_CLI_IMAGE=aws_cli_image,
         )
-        h.kubectl("wait", "--for=condition=Ready", f"pod/{POD_NAME}", "-n", namespace, "--timeout=300s")
+        h.run_kubectl("wait", "--for=condition=Ready", f"pod/{POD_NAME}", "-n", namespace, "--timeout=300s")
 
-        pod = h.kubectl("get", "pod", POD_NAME, "-n", namespace, "-o", "json").stdout
+        pod = h.run_kubectl("get", "pod", POD_NAME, "-n", namespace, "-o", "json").stdout
         pod_spec = json.loads(pod)["spec"]
         assert pod_spec["serviceAccountName"] == service_account
         assert pod_spec["containers"][0]["envFrom"] == [{"configMapRef": {"name": config_map}}]
@@ -191,7 +191,7 @@ def test_batch_pod_identity_access(
         for command in denied_commands:
             h.assert_pod_command_denied(namespace, POD_NAME, *command)
     finally:
-        h.kubectl("delete", "pod", POD_NAME, "-n", namespace, "--ignore-not-found", "--wait=false", check=False)
+        h.run_kubectl("delete", "pod", POD_NAME, "-n", namespace, "--ignore-not-found", "--wait=false", check=False)
         _delete_test_object(intake_bucket, input_key)
         _delete_test_object(intake_bucket, denied_intake_key)
         _delete_test_object(output_bucket, output_key)

@@ -21,6 +21,7 @@ from collections.abc import Generator
 
 import pytest
 from pytest_jupyter_deploy.deployment import EndToEndDeployment
+from pytest_jupyter_deploy.kubernetes.kubectl import run_kubectl
 
 from tests.e2e import _serving_helpers as h
 
@@ -66,7 +67,7 @@ def _await_admitted_and_running(lws_name: str, pod_wait_polls: int) -> list[str]
     """Assert Kueue admits the workload, both pods reach Running; return their node names."""
     admitted = False
     for _ in range(30):  # ~5 min
-        result = h.kubectl(
+        result = run_kubectl(
             "get",
             "workloads",
             "-n",
@@ -81,13 +82,13 @@ def _await_admitted_and_running(lws_name: str, pod_wait_polls: int) -> list[str]
         time.sleep(10)
 
     if not admitted:
-        workloads = h.kubectl("get", "workloads", "-n", NAMESPACE, "-o", "wide", check=False).stdout
+        workloads = run_kubectl("get", "workloads", "-n", NAMESPACE, "-o", "wide", check=False).stdout
         raise AssertionError(f"Kueue Workload never reached Admitted=True\n--- workloads ---\n{workloads}")
 
     all_ready = False
     phases: list[str] = []
     for _ in range(pod_wait_polls):
-        result = h.kubectl(
+        result = run_kubectl(
             "get",
             "pods",
             "-n",
@@ -105,11 +106,21 @@ def _await_admitted_and_running(lws_name: str, pod_wait_polls: int) -> list[str]
         time.sleep(10)
 
     if not all_ready:
-        desc = h.kubectl("describe", "pods", "-n", NAMESPACE, "-l", f"app={lws_name}", check=False).stdout
+        desc = run_kubectl("describe", "pods", "-n", NAMESPACE, "-l", f"app={lws_name}", check=False).stdout
         raise AssertionError(f"Expected 2 Running pods, got phases: {phases}\n--- describe ---\n{desc[-2000:]}")
 
     return (
-        h.kubectl("get", "pods", "-n", NAMESPACE, "-l", f"app={lws_name}", "-o", "jsonpath={.items[*].spec.nodeName}")
+        run_kubectl(
+            "get",
+            "pods",
+            "-n",
+            NAMESPACE,
+            "-l",
+            f"app={lws_name}",
+            "-o",
+            "jsonpath={.items[*].spec.nodeName}",
+            check=True,
+        )
         .stdout.strip()
         .split()
     )
@@ -135,7 +146,7 @@ def test_kueue_gang_schedules_lws_group_cpu(
         nodes = _await_admitted_and_running(lws_name, pod_wait_polls=18)  # ~3 min
         assert len(nodes) == 2, f"Expected 2 scheduled pods, got: {nodes}"
     finally:
-        h.kubectl("delete", "leaderworkerset", lws_name, "-n", NAMESPACE, "--ignore-not-found", check=False)
+        run_kubectl("delete", "leaderworkerset", lws_name, "-n", NAMESPACE, "--ignore-not-found", check=False)
 
 
 @pytest.mark.mutating
@@ -159,7 +170,7 @@ def test_kueue_gang_schedules_on_gpu_nodes(
         nodes = _await_admitted_and_running(lws_name, pod_wait_polls=60)  # ~10 min (2 sequential GPU nodes)
         assert len(nodes) == 2, f"Expected 2 scheduled pods, got: {nodes}"
         for node in nodes:
-            labels = h.kubectl("get", "node", node, "-o", "jsonpath={.metadata.labels}").stdout
+            labels = run_kubectl("get", "node", node, "-o", "jsonpath={.metadata.labels}", check=True).stdout
             assert "nvidia" in labels, f"Pod must run on a Karpenter GPU node, but {node} labels lack nvidia"
     finally:
-        h.kubectl("delete", "leaderworkerset", lws_name, "-n", NAMESPACE, "--ignore-not-found", check=False)
+        run_kubectl("delete", "leaderworkerset", lws_name, "-n", NAMESPACE, "--ignore-not-found", check=False)
