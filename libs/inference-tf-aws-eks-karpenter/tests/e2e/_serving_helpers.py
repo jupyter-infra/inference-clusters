@@ -85,6 +85,24 @@ def kubectl(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["kubectl", *args], check=check, capture_output=True, text=True)
 
 
+def aws_cli(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    """Run an AWS CLI command on the test host."""
+    return subprocess.run(["aws", *args], check=check, capture_output=True, text=True)
+
+
+def exec_in_pod(namespace: str, pod: str, *command: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    """Run a command in a pod."""
+    return kubectl("exec", pod, "-n", namespace, "--", *command, check=check)
+
+
+def assert_pod_command_denied(namespace: str, pod: str, *command: str) -> None:
+    """Check that AWS denies a command from a pod."""
+    result = exec_in_pod(namespace, pod, *command, check=False)
+    output = f"{result.stdout}\n{result.stderr}"
+    assert result.returncode != 0, f"The command succeeded but access must be denied: {' '.join(command)}"
+    assert "AccessDenied" in output or "not authorized" in output, output
+
+
 def apply_resource(name: str, **subs: str) -> str:
     """kubectl-apply a manifest from tests/e2e/resources/, substituting any ${...} vars.
 
