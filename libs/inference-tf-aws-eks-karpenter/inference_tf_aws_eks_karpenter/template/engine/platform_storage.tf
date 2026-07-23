@@ -17,6 +17,7 @@ module "model_store" {
   # random_id keeps two deployments in one account/region conflict-free (project rule).
   bucket_name_prefix = "${local.resource_name_prefix}-store"
   combined_tags      = local.combined_tags
+  lifecycle_rule     = null
 }
 
 locals {
@@ -56,18 +57,24 @@ resource "aws_iam_role_policy" "node_s3" {
 
 # --- Dedicated batch-inference buckets (always created, start empty) ---
 #
-# Batch data is high-churn (requests in, results + metrics out, benchmark cleanup
-# deletes) — the opposite lifecycle of the write-once model store. Dedicated buckets
-# keep that churn, and the write grant it needs, away from the weights entirely.
+# Batch data changes frequently (requests in, results and metrics out). This behavior
+# differs from the write-once model store. Dedicated buckets keep the write grant away
+# from the model weights.
 # Intake and output are SEPARATE buckets: requests flow into batch_intake, workers
 # publish results and run summaries (metrics/) to batch_output. The bucket boundary
 # makes each data flow one-directional and lets retention/lifecycle rules differ.
-# A lifecycle rule on each bucket removes batch artifacts after 90 days.
+# The shared bucket module removes batch artifacts after 90 days.
 module "batch_intake" {
   source = "./modules/s3_bucket"
 
   bucket_name_prefix = "${local.resource_name_prefix}-batch-in"
   combined_tags      = local.combined_tags
+  lifecycle_rule = {
+    id                                     = "expire-batch-data"
+    expiration_days                        = 90
+    noncurrent_version_expiration_days     = 90
+    abort_incomplete_multipart_upload_days = 7
+  }
 }
 
 module "batch_output" {
@@ -75,88 +82,95 @@ module "batch_output" {
 
   bucket_name_prefix = "${local.resource_name_prefix}-batch-out"
   combined_tags      = local.combined_tags
-}
-
-# Batch data is transient: lifecycle rules delete current objects after 90 days,
-# delete noncurrent versions 90 days after they become noncurrent, and abort
-# incomplete multipart uploads after 7 days. The model store has no expiration
-# rule — weights stay until the onboarder or the operator removes them.
-resource "aws_s3_bucket_lifecycle_configuration" "batch_intake" {
-  bucket = module.batch_intake.bucket_name
-
-  rule {
-    id     = "expire-batch-data"
-    status = "Enabled"
-
-    filter {}
-
-    expiration {
-      days = 90
-    }
-
-    noncurrent_version_expiration {
-      noncurrent_days = 90
-    }
-
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 7
-    }
+  lifecycle_rule = {
+    id                                     = "expire-batch-data"
+    expiration_days                        = 90
+    noncurrent_version_expiration_days     = 90
+    abort_incomplete_multipart_upload_days = 7
   }
 }
 
-resource "aws_s3_bucket_lifecycle_configuration" "batch_output" {
-  bucket = module.batch_output.bucket_name
-
-  rule {
-    id     = "expire-batch-data"
-    status = "Enabled"
-
-    filter {}
-
-    expiration {
-      days = 90
-    }
-
-    noncurrent_version_expiration {
-      noncurrent_days = 90
-    }
-
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 7
-    }
-  }
+locals {
+  batch_inference_service_account_name = "batch-inference"
+  batch_storage_config_map_name        = "batch-storage"
 }
 
-# Bespoke node-role grant for the batch buckets: full object lifecycle (get, put,
-# delete) scoped to each batch bucket ARN — never the model store, never *. Put on
-# intake lets the in-cluster harness seed requests; delete covers benchmark cleanup.
-# AbortMultipartUpload is the cleanup path SDK uploads use when a large multipart
-# upload fails partway (same rationale as the onboarder grant).
-data "aws_iam_policy_document" "node_batch_s3" {
+# @secure_recommendation: Use Pod Identity and exact object actions for batch data.
+data "aws_iam_policy_document" "batch_s3" {
   statement {
-    sid     = "ListBatchStores"
-    effect  = "Allow"
-    actions = ["s3:ListBucket", "s3:GetBucketLocation"]
-    resources = [
-      module.batch_intake.bucket_arn,
-      module.batch_output.bucket_arn,
-    ]
+    sid       = "ListBatchIntake"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket", "s3:GetBucketLocation"]
+    resources = [module.batch_intake.bucket_arn]
   }
+
   statement {
-    sid     = "ManageBatchData"
-    effect  = "Allow"
-    actions = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"]
-    resources = [
-      "${module.batch_intake.bucket_arn}/*",
-      "${module.batch_output.bucket_arn}/*",
-    ]
+    sid       = "ReadBatchIntake"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["${module.batch_intake.bucket_arn}/*"]
+  }
+
+  statement {
+    sid       = "ListBatchOutput"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket", "s3:GetBucketLocation"]
+    resources = [module.batch_output.bucket_arn]
+  }
+
+  statement {
+    sid       = "ReadWriteBatchOutput"
+    effect    = "Allow"
+    actions   = ["s3:GetObject", "s3:PutObject"]
+    resources = ["${module.batch_output.bucket_arn}/*"]
   }
 }
 
-resource "aws_iam_role_policy" "node_batch_s3" {
-  name   = "${local.resource_name_prefix}-node-batch-s3"
-  role   = module.node_role.role_name
-  policy = data.aws_iam_policy_document.node_batch_s3.json
+module "batch_inference_role" {
+  source             = "./modules/iam_role"
+  role_name          = "${local.resource_name_prefix}-batch-inference"
+  assume_role_policy = data.aws_iam_policy_document.pod_identity_trust.json
+  combined_tags      = local.combined_tags
+}
+
+resource "aws_iam_role_policy" "batch_s3" {
+  name   = "${local.resource_name_prefix}-batch-s3"
+  role   = module.batch_inference_role.role_name
+  policy = data.aws_iam_policy_document.batch_s3.json
+}
+
+resource "kubernetes_service_account_v1" "batch_inference" {
+  metadata {
+    name      = local.batch_inference_service_account_name
+    namespace = kubernetes_namespace_v1.workload.metadata[0].name
+  }
+}
+
+resource "kubernetes_config_map_v1" "batch_storage" {
+  metadata {
+    name      = local.batch_storage_config_map_name
+    namespace = kubernetes_namespace_v1.workload.metadata[0].name
+  }
+
+  data = {
+    AWS_REGION          = data.aws_region.current.id
+    AWS_DEFAULT_REGION  = data.aws_region.current.id
+    BATCH_INTAKE_BUCKET = module.batch_intake.bucket_name
+    BATCH_OUTPUT_BUCKET = module.batch_output.bucket_name
+  }
+}
+
+resource "aws_eks_pod_identity_association" "batch_inference" {
+  cluster_name    = module.eks_cluster.cluster_name
+  namespace       = kubernetes_service_account_v1.batch_inference.metadata[0].namespace
+  service_account = kubernetes_service_account_v1.batch_inference.metadata[0].name
+  role_arn        = module.batch_inference_role.role_arn
+  tags            = local.combined_tags
+
+  depends_on = [
+    aws_eks_addon.pod_identity_agent,
+    aws_iam_role_policy.batch_s3,
+  ]
 }
 
 # --- S3-mount path: dedicated Pod Identity role for the Mountpoint CSI driver ---

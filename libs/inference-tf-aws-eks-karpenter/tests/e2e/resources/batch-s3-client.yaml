@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: batch-s3-e2e
+  namespace: ${NAMESPACE}
+spec:
+  restartPolicy: Never
+  serviceAccountName: ${SERVICE_ACCOUNT}
+  containers:
+    - name: aws-cli
+      image: ${AWS_CLI_IMAGE}
+      command: ["/bin/sh", "-c"]
+      envFrom:
+        - configMapRef:
+            name: ${CONFIG_MAP}
+      env:
+        - name: INPUT_KEY
+          value: ${INPUT_KEY}
+        - name: OUTPUT_KEY
+          value: ${OUTPUT_KEY}
+        - name: MODEL_STORE_BUCKET
+          value: ${MODEL_STORE_BUCKET}
+        - name: MODEL_STORE_KEY
+          value: ${MODEL_STORE_KEY}
+      args:
+        - |
+          set -eu
+
+          expect_denied() {
+            if "$$@" >/tmp/denied 2>&1; then
+              echo "Expected an access denial: $$*"
+              exit 1
+            fi
+            grep -Eq "AccessDenied|not authorized" /tmp/denied
+          }
+
+          identity=$$(aws sts get-caller-identity --query Arn --output text)
+          case "$$identity" in
+            *batch-inference*) ;;
+            *)
+              echo "The pod did not use the batch-inference Pod Identity role: $$identity"
+              exit 1
+              ;;
+          esac
+
+          listed_input=$$(aws s3api list-objects-v2 \
+            --bucket "$$BATCH_INTAKE_BUCKET" \
+            --prefix "$$INPUT_KEY" \
+            --query "Contents[?Key=='$$INPUT_KEY'].Key" \
+            --output text)
+          test "$$listed_input" = "$$INPUT_KEY"
+          aws s3api get-object \
+            --bucket "$$BATCH_INTAKE_BUCKET" \
+            --key "$$INPUT_KEY" \
+            /tmp/input >/dev/null
+
+          aws s3api put-object \
+            --bucket "$$BATCH_OUTPUT_BUCKET" \
+            --key "$$OUTPUT_KEY" \
+            --body /tmp/input >/dev/null
+          aws s3api get-object \
+            --bucket "$$BATCH_OUTPUT_BUCKET" \
+            --key "$$OUTPUT_KEY" \
+            /tmp/output >/dev/null
+          test "$$(cat /tmp/input)" = "$$(cat /tmp/output)"
+          listed_output=$$(aws s3api list-objects-v2 \
+            --bucket "$$BATCH_OUTPUT_BUCKET" \
+            --prefix "$$OUTPUT_KEY" \
+            --query "Contents[?Key=='$$OUTPUT_KEY'].Key" \
+            --output text)
+          test "$$listed_output" = "$$OUTPUT_KEY"
+
+          expect_denied aws s3api put-object \
+            --bucket "$$BATCH_INTAKE_BUCKET" \
+            --key "$$INPUT_KEY-denied" \
+            --body /tmp/input
+          expect_denied aws s3api delete-object \
+            --bucket "$$BATCH_INTAKE_BUCKET" \
+            --key "$$INPUT_KEY"
+          expect_denied aws s3api delete-object \
+            --bucket "$$BATCH_OUTPUT_BUCKET" \
+            --key "$$OUTPUT_KEY"
+          expect_denied aws s3api put-object \
+            --bucket "$$MODEL_STORE_BUCKET" \
+            --key "e2e/batch-s3-denied" \
+            --body /tmp/input
+          expect_denied aws s3api get-object \
+            --bucket "$$MODEL_STORE_BUCKET" \
+            --key "$$MODEL_STORE_KEY" \
+            /tmp/model-store-denied
+          expect_denied aws s3api delete-bucket \
+            --bucket "$$BATCH_OUTPUT_BUCKET"
+          expect_denied aws s3api put-bucket-versioning \
+            --bucket "$$BATCH_OUTPUT_BUCKET" \
+            --versioning-configuration Status=Suspended
+
+          echo "batch-s3-e2e: success"

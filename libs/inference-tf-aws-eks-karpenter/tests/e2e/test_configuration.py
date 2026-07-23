@@ -44,6 +44,16 @@ def test_agent_md_rendered_after_init(e2e_deployment: EndToEndDeployment) -> Non
         assert not leftover, f"rendered AGENT.md still has unsubstituted jd placeholders: {leftover}"
 
 
+def test_agent_md_defines_batch_storage_contract(e2e_deployment: EndToEndDeployment) -> None:
+    """The rendered guide defines the fixed Helm and KRO batch storage contract."""
+    with undeployed_project(e2e_deployment.suite_config) as (project_path, _cli):
+        agent_content = (project_path / "AGENT.md").read_text()
+        assert "serviceAccountName: batch-inference" in agent_content
+        assert "name: batch-storage" in agent_content
+        assert "BATCH_INTAKE_BUCKET" in agent_content
+        assert "BATCH_OUTPUT_BUCKET" in agent_content
+
+
 def test_project_is_configurable(e2e_deployment: EndToEndDeployment) -> None:
     """`jd config` succeeds on a freshly scaffolded project.
 

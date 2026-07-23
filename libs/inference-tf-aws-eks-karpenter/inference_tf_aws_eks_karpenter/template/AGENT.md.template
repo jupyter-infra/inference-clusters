@@ -184,6 +184,37 @@ kubectl apply -f my-cr.yaml                          # a ServableInference (etc.
 
 KRO's controller now reconciles the CR's children continuously.
 
+## Batch S3 access
+
+Batch workloads use the S3 API. Do not mount the intake or output bucket as a
+PersistentVolume. The platform creates these resources in the workload namespace:
+
+- The `batch-inference` service account gets credentials through EKS Pod Identity.
+- The `batch-storage` ConfigMap contains the AWS Region and both bucket names.
+- The role can list and read intake objects.
+- The role can list, read, and write output objects.
+- The role cannot delete objects or change either bucket.
+
+Deploy each batch workload in the configured workload namespace. The default namespace is
+`inference`. A Helm Deployment must use this pod configuration:
+
+```yaml
+spec:
+  template:
+    spec:
+      serviceAccountName: batch-inference
+      containers:
+        - name: worker
+          envFrom:
+            - configMapRef:
+                name: batch-storage
+```
+
+A KRO graph must put the same `serviceAccountName` and `envFrom` fields in each batch
+pod template. The worker reads `BATCH_INTAKE_BUCKET` and writes
+`BATCH_OUTPUT_BUCKET`. The AWS SDK and AWS CLI use the Pod Identity credentials
+automatically. A producer uses a separate IAM identity to upload intake objects.
+
 ## GPU placement — choosing an accelerator tier
 
 Karpenter provisions GPU nodes on demand from two pools. A workload pod picks a tier by

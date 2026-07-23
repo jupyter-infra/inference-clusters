@@ -266,26 +266,81 @@ def test_batch_intake_and_output_are_dedicated_buckets() -> None:
 
 
 def test_batch_buckets_expire_current_and_noncurrent_objects() -> None:
-    """Each batch bucket MUST remove current and noncurrent objects after 90 days."""
+    """Each batch bucket MUST configure retention through the shared S3 bucket module."""
     content = (ENGINE / "platform_storage.tf").read_text()
     for bucket in ("batch_intake", "batch_output"):
-        block = _resource(content, "aws_s3_bucket_lifecycle_configuration", bucket)
-        assert f"module.{bucket}.bucket_name" in block
-        assert "days = 90" in block
-        assert "noncurrent_days = 90" in block
-        assert "days_after_initiation = 7" in block
+        match = re.search(rf'module\s+"{bucket}"\s*\{{.*?\n\}}', content, re.DOTALL)
+        assert match is not None, f"module.{bucket} not found"
+        block = match.group(0)
+        assert "lifecycle_rule" in block
+        assert re.search(r"expiration_days\s+= 90", block)
+        assert re.search(r"noncurrent_version_expiration_days\s+= 90", block)
+        assert re.search(r"abort_incomplete_multipart_upload_days\s+= 7", block)
+
+    module = ENGINE / "modules" / "s3_bucket"
+    module_main = (module / "main.tf").read_text()
+    module_variables = (module / "variables.tf").read_text()
+    assert 'variable "lifecycle_rule"' in module_variables
+    lifecycle = _resource(module_main, "aws_s3_bucket_lifecycle_configuration", "this")
+    assert "var.lifecycle_rule" in lifecycle
+    assert "aws_s3_bucket_versioning.this" in lifecycle
+    assert 'resource "aws_s3_bucket_ownership_controls" "this"' in module_main
+    assert "BucketOwnerEnforced" in module_main
+    assert "aws:SecureTransport" in module_main
+    assert re.search(r'values\s+= \["false"\]', module_main)
 
 
-def test_node_batch_s3_grant_scoped_to_batch_prefixes() -> None:
-    """The batch grant MUST cover the object lifecycle ONLY on the batch buckets, never `*`."""
+def test_batch_s3_uses_a_least_privilege_pod_identity_role() -> None:
+    """The batch role MUST read intake and read/write output without mutation access."""
     content = (ENGINE / "platform_storage.tf").read_text()
-    block = _extract_block(content, "data", "aws_iam_policy_document", "node_batch_s3")
+    block = _extract_block(content, "data", "aws_iam_policy_document", "batch_s3")
     assert '"*"' not in block
     assert "module.model_store.bucket_arn" not in block, "batch grant must not touch the model store"
-    for action in ("s3:GetObject", "s3:PutObject", "s3:DeleteObject"):
-        assert action in block
+    assert block.count("s3:GetObject") == 2
+    assert block.count("s3:PutObject") == 1
+    assert "s3:AbortMultipartUpload" not in block
+    assert "s3:DeleteObject" not in block and "s3:DeleteBucket" not in block
     for bucket in ("module.batch_intake.bucket_arn", "module.batch_output.bucket_arn"):
         assert bucket in block
+    assert 'module "batch_inference_role"' in content
+    association = _resource(content, "aws_eks_pod_identity_association", "batch_inference")
+    assert "module.batch_inference_role.role_arn" in association
+    assert "kubernetes_service_account_v1.batch_inference" in association
+
+
+def test_batch_storage_contract_is_available_to_workloads() -> None:
+    """The template MUST expose fixed Pod Identity and bucket configuration resources."""
+    content = (ENGINE / "platform_storage.tf").read_text()
+    service_account = _resource(content, "kubernetes_service_account_v1", "batch_inference")
+    config_map = _resource(content, "kubernetes_config_map_v1", "batch_storage")
+    assert 'batch_inference_service_account_name = "batch-inference"' in content
+    assert 'batch_storage_config_map_name        = "batch-storage"' in content
+    assert "kubernetes_namespace_v1.workload" in service_account
+    assert "AWS_REGION" in config_map
+    assert "BATCH_INTAKE_BUCKET" in config_map and "module.batch_intake.bucket_name" in config_map
+    assert "BATCH_OUTPUT_BUCKET" in config_map and "module.batch_output.bucket_name" in config_map
+
+    outputs = (ENGINE / "outputs.tf").read_text()
+    for name in (
+        "batch_intake_bucket",
+        "batch_intake_bucket_arn",
+        "batch_output_bucket",
+        "batch_output_bucket_arn",
+        "batch_inference_service_account_name",
+        "batch_storage_config_map_name",
+        "aws_cli_image_uri",
+        "workload_namespace",
+    ):
+        assert f'output "{name}"' in outputs
+
+    images = (ENGINE / "images.tf").read_text()
+    assert 'aws_cli_source_image = "public.ecr.aws/aws-cli/aws-cli:2.27.49"' in images
+    assert "local.aws_cli_source_image" in images
+
+    agent = (TEMPLATE_PATH / "AGENT.md.template").read_text()
+    assert "serviceAccountName: batch-inference" in agent
+    assert "name: batch-storage" in agent
+    assert "BATCH_INTAKE_BUCKET" in agent and "BATCH_OUTPUT_BUCKET" in agent
 
 
 def test_onboarder_iam_scopes_workload_ecr_and_bucket() -> None:
