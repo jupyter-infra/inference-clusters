@@ -2,7 +2,6 @@
 
 import json
 import uuid
-from pathlib import Path
 
 import pytest
 from pytest_jupyter_deploy.deployment import EndToEndDeployment
@@ -10,10 +9,7 @@ from pytest_jupyter_deploy.deployment import EndToEndDeployment
 from tests.e2e import _serving_helpers as h
 
 POD_NAME = "batch-s3-e2e"
-
-
-def _delete_test_object(bucket: str, key: str) -> None:
-    h.aws_cli("s3api", "delete-object", "--bucket", bucket, "--key", key, check=False)
+PAYLOAD = "batch S3 E2E payload\n"
 
 
 @pytest.mark.full_deployment
@@ -38,11 +34,9 @@ def test_batch_pod_identity_access(
     model_store_key = f"e2e/{run_id}/model-store.txt"
     denied_intake_key = f"{input_key}-denied"
     denied_model_key = f"{model_store_key}-denied"
-    payload = Path(f"/tmp/batch-s3-{run_id}.txt")
-    payload.write_text("batch S3 E2E payload\n")
 
-    h.aws_cli("s3api", "put-object", "--bucket", intake_bucket, "--key", input_key, "--body", str(payload))
-    h.aws_cli("s3api", "put-object", "--bucket", model_store_bucket, "--key", model_store_key, "--body", str(payload))
+    h.s3_put_object(intake_bucket, input_key, PAYLOAD.encode())
+    h.s3_put_object(model_store_bucket, model_store_key, PAYLOAD.encode())
     h.run_kubectl("delete", "pod", POD_NAME, "-n", namespace, "--ignore-not-found", "--wait=false", check=False)
 
     try:
@@ -124,7 +118,7 @@ def test_batch_pod_identity_access(
             "/tmp/output",
         )
         output_payload = h.exec_in_pod(namespace, POD_NAME, "cat", "/tmp/output").stdout
-        assert output_payload == payload.read_text()
+        assert output_payload == PAYLOAD
         listed_output = h.exec_in_pod(
             namespace,
             POD_NAME,
@@ -192,9 +186,8 @@ def test_batch_pod_identity_access(
             h.assert_pod_command_denied(namespace, POD_NAME, *command)
     finally:
         h.run_kubectl("delete", "pod", POD_NAME, "-n", namespace, "--ignore-not-found", "--wait=false", check=False)
-        _delete_test_object(intake_bucket, input_key)
-        _delete_test_object(intake_bucket, denied_intake_key)
-        _delete_test_object(output_bucket, output_key)
-        _delete_test_object(model_store_bucket, model_store_key)
-        _delete_test_object(model_store_bucket, denied_model_key)
-        payload.unlink(missing_ok=True)
+        h.s3_delete_object(intake_bucket, input_key)
+        h.s3_delete_object(intake_bucket, denied_intake_key)
+        h.s3_delete_object(output_bucket, output_key)
+        h.s3_delete_object(model_store_bucket, model_store_key)
+        h.s3_delete_object(model_store_bucket, denied_model_key)

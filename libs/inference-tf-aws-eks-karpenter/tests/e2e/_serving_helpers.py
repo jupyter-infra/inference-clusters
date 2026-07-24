@@ -7,6 +7,7 @@ only in what they assert. onboard_chart is Path A (Helm chart -> overrides.yaml)
 onboard_graph is Path B (KRO graph -> graph-air-gapped.yaml).
 """
 
+import functools
 import json
 import os
 import shutil
@@ -16,6 +17,8 @@ import tempfile
 import time
 from pathlib import Path
 
+import boto3
+from mypy_boto3_s3.client import S3Client
 from pytest_jupyter_deploy.deployment import EndToEndDeployment
 from pytest_jupyter_deploy.kubernetes import nodes
 from pytest_jupyter_deploy.kubernetes.kubectl import run_kubectl
@@ -83,9 +86,21 @@ def workload_image_repo(e2e: EndToEndDeployment, image_suffix: str = WORKLOAD_IM
     return f"{prefix}/{image}"
 
 
-def aws_cli(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    """Run an AWS CLI command on the test host."""
-    return subprocess.run(["aws", *args], check=check, capture_output=True, text=True)
+@functools.cache
+def _s3_client() -> S3Client:
+    """boto3 S3 client for host-side test setup and cleanup, built once per test session."""
+    return boto3.client("s3")
+
+
+def s3_put_object(bucket: str, key: str, body: bytes) -> None:
+    """Upload a small test object from the test host."""
+    _s3_client().put_object(Bucket=bucket, Key=key, Body=body)
+
+
+def s3_delete_object(bucket: str, key: str) -> None:
+    """Delete a test object from the test host. S3 reports success for an absent key,
+    so cleanup of an object that a denied write never created is a no-op."""
+    _s3_client().delete_object(Bucket=bucket, Key=key)
 
 
 def exec_in_pod(namespace: str, pod: str, *command: str, check: bool = True) -> subprocess.CompletedProcess[str]:
