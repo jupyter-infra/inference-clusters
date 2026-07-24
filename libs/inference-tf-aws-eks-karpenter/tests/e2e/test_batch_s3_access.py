@@ -26,7 +26,7 @@ def test_batch_pod_identity_access(
     intake_bucket = h.jd_output(e2e_deployment, "batch_intake_bucket")
     output_bucket = h.jd_output(e2e_deployment, "batch_output_bucket")
     model_store_bucket = h.jd_output(e2e_deployment, "model_store_bucket")
-    aws_cli_image = h.jd_output(e2e_deployment, "aws_cli_image_uri")
+    aws_cli_image = h.aws_cli_image(e2e_deployment)
 
     run_id = uuid.uuid4().hex
     input_key = f"e2e/{run_id}/input.txt"

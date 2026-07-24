@@ -328,14 +328,9 @@ def test_batch_storage_contract_is_available_to_workloads() -> None:
         "batch_output_bucket_arn",
         "batch_inference_service_account_name",
         "batch_storage_config_map_name",
-        "aws_cli_image_uri",
         "workload_namespace",
     ):
         assert f'output "{name}"' in outputs
-
-    images = (ENGINE / "images.tf").read_text()
-    assert 'aws_cli_source_image = "public.ecr.aws/aws-cli/aws-cli:2.27.49"' in images
-    assert "local.aws_cli_source_image" in images
 
     agent = (TEMPLATE_PATH / "AGENT.md.template").read_text()
     assert "serviceAccountName: batch-inference" in agent

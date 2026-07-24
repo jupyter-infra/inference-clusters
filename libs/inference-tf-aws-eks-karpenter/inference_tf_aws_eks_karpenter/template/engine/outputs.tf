@@ -79,11 +79,6 @@ output "batch_storage_config_map_name" {
   value       = kubernetes_config_map_v1.batch_storage.metadata[0].name
 }
 
-output "aws_cli_image_uri" {
-  description = "Private ECR pull-through URI for the pinned AWS CLI image."
-  value       = local.common_image_uris[local.aws_cli_source_image]
-}
-
 output "workload_namespace" {
   description = "Namespace for inference workloads and shared batch resources."
   value       = kubernetes_namespace_v1.workload.metadata[0].name

@@ -15,8 +15,6 @@
 # public.ecr.aws/karpenter/... -> <acct>.dkr.ecr.<region>…/ecr-public/karpenter/...
 
 locals {
-  aws_cli_source_image = "public.ecr.aws/aws-cli/aws-cli:2.27.49"
-
   # template-owned, NOT a jd variable — each entry is a wiring commitment (rule +
   # node-role IAM prefix + hosts.toml stanza). Object shape (not bare string)
   # leaves room for the future credential_arn seam without a schema change.
@@ -48,7 +46,7 @@ locals {
   # safe. e.g. public.ecr.aws/docker/library/busybox:1.36
   #        ->  <registry>/ecr-public/docker/library/busybox:1.36
   common_image_uris = {
-    for img in setunion(toset(var.common_images), toset([local.aws_cli_source_image])) :
+    for img in var.common_images :
     img => "${local.ecr_registry}/${local.upstream_prefix_by_host[split("/", img)[0]]}/${join("/", slice(split("/", img), 1, length(split("/", img))))}"
   }
 }
