@@ -662,3 +662,9 @@ def test_onboarder_backstop_and_workload_repos_cluster_scoped() -> None:
     )
     doc = _extract_block(content, "data", "aws_iam_policy_document", "onboarder_extra")
     assert "ecr:TagResource" in doc, "onboarder must be allowed to tag the repos it creates"
+
+
+def test_onboarder_installs_hugging_face_client() -> None:
+    content = (ENGINE / "onboarder.tf").read_text()
+
+    assert "huggingface_hub==1.24.0" in content

@@ -100,6 +100,7 @@ class TestPureCore(unittest.TestCase):
 
     def test_weight_name_from_source(self) -> None:
         self.assertEqual(co.weight_name_from_source("hf://google/Gemma-2-9b"), "gemma-2-9b")
+        self.assertEqual(co.weight_name_from_source("hf://google/Gemma-2-9b@abc123"), "gemma-2-9b")
         self.assertEqual(co.weight_name_from_source("s3://b/pre/My-Model/"), "my-model")
 
     def test_split_weight_entry(self) -> None:
@@ -148,6 +149,31 @@ class TestPureCore(unittest.TestCase):
             self.assertEqual(co.Runner._ecr_tag_args(), [])
         with patch.dict("os.environ", {}, clear=True):
             self.assertEqual(co.Runner._ecr_tag_args(), [])
+
+    @patch("subprocess.run")
+    def test_hugging_face_revision_is_pinned(self, run: Any) -> None:
+        runner = co.Runner()
+
+        runner.ingest_weights("hf://PaddlePaddle/PP-DocLayoutV3_onnx@abc123", f"{MODELS}/layout", "layout")
+
+        self.assertEqual(
+            run.call_args_list[0].args[0],
+            [
+                "hf",
+                "download",
+                "PaddlePaddle/PP-DocLayoutV3_onnx",
+                "--local-dir",
+                "/tmp/hf/layout",
+                "--revision",
+                "abc123",
+            ],
+        )
+
+    def test_hugging_face_revision_cannot_be_empty(self) -> None:
+        runner = co.Runner()
+
+        with self.assertRaises(SystemExit):
+            runner.ingest_weights("hf://PaddlePaddle/PP-DocLayoutV3_onnx@", f"{MODELS}/layout", "layout")
 
 
 @unittest.skipIf(_HELM is None, "helm not on PATH — required for the Path-A onboard backstop")

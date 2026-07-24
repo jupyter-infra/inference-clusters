@@ -172,7 +172,7 @@ def weight_name_from_source(source: str) -> str:
     Lowercased; a trailing slash is ignored. Graph/chart authors should point a weight
     source at a well-named leaf (the name becomes the S3 subdir the workload reads).
     """
-    body = source.split("://", 1)[-1].rstrip("/")
+    body = source.split("://", 1)[-1].partition("@")[0].rstrip("/")
     leaf = body.rsplit("/", 1)[-1]
     if not leaf:
         raise ValueError(f"cannot derive a weight name from source {source!r}")
@@ -354,9 +354,15 @@ class Runner:
         if source.startswith("s3://"):
             self._copy_s3_prefix(source, dst_uri)
         elif source.startswith("hf://"):
-            repo_id = source[len("hf://") :].split("@", 1)[0]
+            repository_and_revision = source[len("hf://") :]
+            repo_id, separator, revision = repository_and_revision.partition("@")
+            if separator and not revision:
+                raise SystemExit(f"[onboard] ERROR: Hugging Face source {source!r} has an empty revision")
             stage = f"/tmp/hf/{name}"
-            subprocess.run(["huggingface-cli", "download", repo_id, "--local-dir", stage], check=True)
+            command = ["hf", "download", repo_id, "--local-dir", stage]
+            if separator:
+                command.extend(["--revision", revision])
+            subprocess.run(command, check=True)
             subprocess.run(["s5cmd", "cp", f"{stage}/", f"{dst_uri}/"], check=True)
         else:
             raise SystemExit(f"[onboard] ERROR: unsupported weight source {source!r} (want hf:// or s3://)")
