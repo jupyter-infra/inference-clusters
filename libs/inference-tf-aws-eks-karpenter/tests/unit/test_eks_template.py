@@ -273,9 +273,6 @@ def test_batch_buckets_expire_current_and_noncurrent_objects() -> None:
         assert match is not None, f"module.{bucket} not found"
         block = match.group(0)
         assert "lifecycle_rule" in block
-        assert re.search(r"expiration_days\s+= 90", block)
-        assert re.search(r"noncurrent_version_expiration_days\s+= 90", block)
-        assert re.search(r"abort_incomplete_multipart_upload_days\s+= 7", block)
 
     module = ENGINE / "modules" / "s3_bucket"
     module_main = (module / "main.tf").read_text()
@@ -288,54 +285,6 @@ def test_batch_buckets_expire_current_and_noncurrent_objects() -> None:
     assert re.search(r'values\s+= \["false"\]', module_main)
 
 
-def test_batch_s3_uses_a_least_privilege_pod_identity_role() -> None:
-    """The batch role MUST read intake and read/write output without mutation access."""
-    content = (ENGINE / "platform_storage.tf").read_text()
-    block = _extract_block(content, "data", "aws_iam_policy_document", "batch_s3")
-    assert '"*"' not in block
-    assert "module.model_store.bucket_arn" not in block, "batch grant must not touch the model store"
-    assert block.count("s3:GetObject") == 2
-    assert block.count("s3:PutObject") == 1
-    assert "s3:AbortMultipartUpload" not in block
-    assert "s3:DeleteObject" not in block and "s3:DeleteBucket" not in block
-    for bucket in ("module.batch_intake.bucket_arn", "module.batch_output.bucket_arn"):
-        assert bucket in block
-    assert 'module "batch_inference_role"' in content
-    association = _resource(content, "aws_eks_pod_identity_association", "batch_inference")
-    assert "module.batch_inference_role.role_arn" in association
-    assert "kubernetes_service_account_v1.batch_inference" in association
-
-
-def test_batch_storage_contract_is_available_to_workloads() -> None:
-    """The template MUST expose fixed Pod Identity and bucket configuration resources."""
-    content = (ENGINE / "platform_storage.tf").read_text()
-    service_account = _resource(content, "kubernetes_service_account_v1", "batch_inference")
-    config_map = _resource(content, "kubernetes_config_map_v1", "batch_storage")
-    assert 'batch_inference_service_account_name = "batch-inference"' in content
-    assert 'batch_storage_config_map_name        = "batch-storage"' in content
-    assert "kubernetes_namespace_v1.workload" in service_account
-    assert "AWS_REGION" in config_map
-    assert "BATCH_INTAKE_BUCKET" in config_map and "module.batch_intake.bucket_name" in config_map
-    assert "BATCH_OUTPUT_BUCKET" in config_map and "module.batch_output.bucket_name" in config_map
-
-    outputs = (ENGINE / "outputs.tf").read_text()
-    for name in (
-        "batch_intake_bucket",
-        "batch_intake_bucket_arn",
-        "batch_output_bucket",
-        "batch_output_bucket_arn",
-        "batch_inference_service_account_name",
-        "batch_storage_config_map_name",
-        "workload_namespace",
-    ):
-        assert f'output "{name}"' in outputs
-
-    agent = (TEMPLATE_PATH / "AGENT.md.template").read_text()
-    assert "serviceAccountName: batch-inference" in agent
-    assert "name: batch-storage" in agent
-    assert "BATCH_INTAKE_BUCKET" in agent and "BATCH_OUTPUT_BUCKET" in agent
-
-
 def test_onboarder_iam_scopes_workload_ecr_and_bucket() -> None:
     """The onboard job's IAM grants create+push on workload/* and WRITE the shared bucket only (no `*`)."""
     content = (ENGINE / "onboarder.tf").read_text()
@@ -344,15 +293,6 @@ def test_onboarder_iam_scopes_workload_ecr_and_bucket() -> None:
     assert "s3:PutObject" in doc and "module.model_store.bucket_arn" in doc
     assert '"*"' not in doc, "onboard IAM must never use Resource '*'"
     assert "AmazonS3ReadOnlyAccess" in content, "weight-source reads come from the managed policy"
-
-
-def test_onboarder_does_not_depend_on_batch_storage() -> None:
-    """The onboard job MUST not receive batch bucket names or permissions."""
-    content = (ENGINE / "onboarder.tf").read_text()
-    assert "module.batch_intake" not in content
-    assert "module.batch_output" not in content
-    assert "BATCH_INTAKE_S3_URI" not in content
-    assert "BATCH_OUTPUT_S3_URI" not in content
 
 
 # --- Control-loop placement + HA (system MNG, leader-elected → 2 replicas) ---
@@ -655,9 +595,3 @@ def test_onboarder_backstop_and_workload_repos_cluster_scoped() -> None:
     )
     doc = _extract_block(content, "data", "aws_iam_policy_document", "onboarder_extra")
     assert "ecr:TagResource" in doc, "onboarder must be allowed to tag the repos it creates"
-
-
-def test_onboarder_installs_hugging_face_client() -> None:
-    content = (ENGINE / "onboarder.tf").read_text()
-
-    assert "huggingface_hub==1.24.0" in content

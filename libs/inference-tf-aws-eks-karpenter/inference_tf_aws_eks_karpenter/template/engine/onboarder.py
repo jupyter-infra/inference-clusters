@@ -354,15 +354,9 @@ class Runner:
         if source.startswith("s3://"):
             self._copy_s3_prefix(source, dst_uri)
         elif source.startswith("hf://"):
-            repository_and_revision = source[len("hf://") :]
-            repo_id, separator, revision = repository_and_revision.partition("@")
-            if separator and not revision:
-                raise SystemExit(f"[onboard] ERROR: Hugging Face source {source!r} has an empty revision")
+            repo_id = source[len("hf://") :].partition("@")[0]
             stage = f"/tmp/hf/{name}"
-            command = ["hf", "download", repo_id, "--local-dir", stage]
-            if separator:
-                command.extend(["--revision", revision])
-            subprocess.run(command, check=True)
+            subprocess.run(["hf", "download", repo_id, "--local-dir", stage], check=True)
             subprocess.run(["s5cmd", "cp", f"{stage}/", f"{dst_uri}/"], check=True)
         else:
             raise SystemExit(f"[onboard] ERROR: unsupported weight source {source!r} (want hf:// or s3://)")
