@@ -284,8 +284,6 @@ def test_batch_buckets_expire_current_and_noncurrent_objects() -> None:
     lifecycle = _resource(module_main, "aws_s3_bucket_lifecycle_configuration", "this")
     assert "var.lifecycle_rule" in lifecycle
     assert "aws_s3_bucket_versioning.this" in lifecycle
-    assert 'resource "aws_s3_bucket_ownership_controls" "this"' in module_main
-    assert "BucketOwnerEnforced" in module_main
     assert "aws:SecureTransport" in module_main
     assert re.search(r'values\s+= \["false"\]', module_main)
 

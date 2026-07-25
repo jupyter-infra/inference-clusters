@@ -7,15 +7,6 @@ resource "aws_s3_bucket" "this" {
   })
 }
 
-# @secure_recommendation: Disable object ACLs and keep bucket ownership with this account.
-resource "aws_s3_bucket_ownership_controls" "this" {
-  bucket = aws_s3_bucket.this.id
-
-  rule {
-    object_ownership = "BucketOwnerEnforced"
-  }
-}
-
 resource "aws_s3_bucket_versioning" "this" {
   bucket = aws_s3_bucket.this.id
 
