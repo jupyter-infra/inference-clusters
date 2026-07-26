@@ -30,9 +30,10 @@ This module is the single source of truth for the onboard logic. It is base64-em
 into the CodeBuild buildspec (engine/onboarder.tf) and also imported directly by the
 unit tests (tests/unit/test_onboarder.py) — the pure core (parse/rewrite/emit)
 is exercised without CodeBuild, with the side-effecting Runner faked. Deps are stdlib +
-pyyaml + boto3 (boto3 for the server-side S3 weight copy, with a byte-streaming fallback)
-— all present on the CodeBuild image and the jd[aws] test env; the module stays a single
-embeddable file.
+pyyaml + boto3 + huggingface_hub (boto3 for the server-side S3 weight copy, with a
+byte-streaming fallback; huggingface_hub for hf:// snapshot downloads) — the CodeBuild
+job gets them from its image plus the buildspec pip install, and the tests get them
+from the package dependencies; the module stays a single embeddable file.
 
 Env (all required unless noted):
   CHART_DIR         local path to the unpacked artifact (chart or graph dir)
@@ -65,6 +66,7 @@ import boto3
 import yaml
 from botocore.config import Config
 from botocore.exceptions import ClientError
+from huggingface_hub import snapshot_download
 
 _MB = 1024 * 1024
 # S3 weight-copy tuning. The PRIMARY path is server-side copy (UploadPartCopy/CopyObject):
@@ -347,8 +349,8 @@ class Runner:
         CodeBuild EBS can't hold a 100s-of-GB model), no memory, and no NIC transit — the
         ~4 Gbps single-instance ceiling of a read-then-write copy is bypassed entirely.
         Sources that grant GetObject but refuse the copy-source read (some cross-account
-        buckets) fall back per-object to byte-streaming. hf:// still stages to disk (the HF
-        client requires it)."""
+        buckets) fall back per-object to byte-streaming. hf:// snapshots to disk through
+        the official huggingface_hub client (the hub API is file-based)."""
         if self.dry_run:
             return
         if source.startswith("s3://"):
@@ -356,7 +358,7 @@ class Runner:
         elif source.startswith("hf://"):
             repo_id = source[len("hf://") :].partition("@")[0]
             stage = f"/tmp/hf/{name}"
-            subprocess.run(["hf", "download", repo_id, "--local-dir", stage], check=True)
+            snapshot_download(repo_id=repo_id, local_dir=stage)
             subprocess.run(["s5cmd", "cp", f"{stage}/", f"{dst_uri}/"], check=True)
         else:
             raise SystemExit(f"[onboard] ERROR: unsupported weight source {source!r} (want hf:// or s3://)")

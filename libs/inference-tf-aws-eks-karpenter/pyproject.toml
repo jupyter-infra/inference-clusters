@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "boto3",
     "boto3-stubs",
+    "huggingface-hub",
     "mypy-boto3-eks",
     "mypy-boto3-s3",
     "mypy-boto3-sts",
