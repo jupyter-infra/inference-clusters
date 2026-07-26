@@ -286,10 +286,10 @@ def python_image(e2e: EndToEndDeployment) -> str:
 
 
 def aws_cli_image(e2e: EndToEndDeployment) -> str:
-    """AWS CLI via ECR pull-through (ecr-public), pinned like client_image and python_image.
-    Test-only image: the batch E2E pod uses it to exercise Pod Identity credentials."""
+    """AWS CLI via ECR pull-through (ecr-public). Test-only image: the batch E2E pod
+    uses it to exercise Pod Identity credentials."""
     registry = jd_output(e2e, "ecr_registry")
-    return f"{registry}/ecr-public/aws-cli/aws-cli:2.27.49"
+    return f"{registry}/ecr-public/aws-cli/aws-cli:latest"
 
 
 def _chat_prompt(model: str) -> str:

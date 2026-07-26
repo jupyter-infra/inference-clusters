@@ -117,7 +117,7 @@ module "onboarder" {
             apt-get update -y && apt-get install -y skopeo
           - command -v helm >/dev/null 2>&1 || (curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash)
           - command -v s5cmd >/dev/null 2>&1 || (curl -fsSL https://github.com/peak/s5cmd/releases/download/v2.2.2/s5cmd_2.2.2_Linux-64bit.tar.gz | tar -xz -C /usr/local/bin s5cmd)
-          - python3 -m pip install --quiet pyyaml "huggingface_hub==1.24.0"
+          - python3 -m pip install --quiet pyyaml huggingface_hub
           - echo "${local.onboarder_script_b64}" | base64 -d | gunzip > /tmp/onboarder.py
       pre_build:
         commands:
