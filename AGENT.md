@@ -48,6 +48,7 @@ This repo is a uv workspace. Common commands (see `justfile`):
 - `just sync` — `uv sync` the workspace
 - `just lint` — `ruff format`, `ruff check --fix`, `mypy`, `terraform fmt`, `yamllint`
 - `just unit-test` — `uv run pytest`
+- `just update-version <template> <patch|minor|major|version>` — bump one template's version
 
 ### General python coding rules
 1. You MUST NOT silence linters without the user's permission.
@@ -114,6 +115,7 @@ until you also add it to that deployment's `<project-dir>/variables.yaml` `overr
 **IMPORTANT**: `jd up` automatically backs up the project to a remote store, in our case
 an S3 bucket in the AWS account. After a full `jd up` run (even if it ends in the failure),
 `jd` saves the project files and the terraform state in the store.
+`jd` creates and manages this store bucket itself — it is NOT provisioned by the CI-infra template.
 
 **IMPORTANT**: If a first `jd up` is interrupted before its local state is pushed to the store,
 `terraform destroy` the partial state rather than bare re-running `jd up`,
@@ -171,3 +173,11 @@ Ask the user which `<project-dir>` to run the e2e tests against.
 Check the `justfile` for the container tool in use. It might either be `docker` or `finch`.
 You can view the running containers with `<CONTAINER-TOOL> container list`.
 
+### Making changes in the GitHub CI
+
+Refer to [`.github/AGENT.md`](.github/AGENT.md).
+
+### Automated code review
+
+Open PRs are reviewed automatically in CI by [roborev](https://roborev.io)
+(policy in [`.roborev.toml`](.roborev.toml)). Run the same review locally with `just review`.

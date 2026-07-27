@@ -18,6 +18,99 @@ lint:
 unit-test:
     uv run pytest
 
+# Bump one template's version across pyproject/__init__/manifest/main.tf + synced charts, then relock
+# Templates are independently versioned; pass the template key (e.g. eks-karpenter).
+# Usage: just update-version <template> [patch|minor|major|<explicit-version>]
+update-version template bump="patch":
+    uv run python scripts/upgrade_template_version.py {{template}} {{bump}}
+    uv lock
+
+# Review the current branch against main with roborev (shares .roborev.toml with CI)
+review:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v roborev >/dev/null 2>&1 || { echo "roborev not found. Install it from https://roborev.io, then optionally run 'just review-setup'."; exit 1; }
+    roborev review --branch --local --wait
+
+# Opt-in: install the roborev post-commit hook for continuous local review
+review-setup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v roborev >/dev/null 2>&1 || { echo "roborev not found. Install it from https://roborev.io first."; exit 1; }
+    roborev init --agent claude-code
+
+# ==============================================================================
+# roborev review image (published to the CI-account ECR by review-build-image.yml)
+# ==============================================================================
+# The review image (roborev + claude-code agent + gh) is published occasionally —
+# when its pinned tool versions in .github/review/Dockerfile change — not per PR.
+# roborev-review.yml pulls it from ECR at review time.
+
+# Build the roborev review image (self-contained: roborev + claude-code agent + gh)
+# Usage: just ci-review-build                     # local: no cache
+# Usage: just ci-review-build <ecr-url>:latest    # CI: use ECR :latest as layer cache
+ci-review-build cache_from="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    CACHE_ARG=""
+    if [ -n "{{cache_from}}" ]; then
+        CACHE_ARG="--cache-from={{cache_from}}"
+        echo "Using cache from: {{cache_from}}"
+    fi
+
+    {{container-tool}} build \
+        -f .github/review/Dockerfile \
+        $CACHE_ARG \
+        -t inference-review:latest \
+        .
+
+    echo "✓ Review image built: inference-review:latest"
+
+# Push the roborev review image to ECR
+# Usage: just ci-review-push <ecr-repo-url> [extra-tag]
+# Pushes as :latest, and also as :<extra-tag> if provided (e.g. git sha)
+ci-review-push ecr_url extra_tag="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    ECR_REGISTRY=$(echo "{{ecr_url}}" | cut -d'/' -f1)
+    REGION=$(echo "{{ecr_url}}" | cut -d'.' -f4)
+
+    echo "Logging in to ECR..."
+    aws ecr get-login-password --region "$REGION" \
+        | {{container-tool}} login --username AWS --password-stdin "$ECR_REGISTRY"
+
+    echo "Pushing to {{ecr_url}}..."
+    {{container-tool}} tag inference-review:latest "{{ecr_url}}:latest"
+    {{container-tool}} push "{{ecr_url}}:latest"
+
+    if [ -n "{{extra_tag}}" ]; then
+        {{container-tool}} tag inference-review:latest "{{ecr_url}}:{{extra_tag}}"
+        {{container-tool}} push "{{ecr_url}}:{{extra_tag}}"
+        echo "✓ Pushed {{ecr_url}}:latest and {{ecr_url}}:{{extra_tag}}"
+    else
+        echo "✓ Pushed {{ecr_url}}:latest"
+    fi
+
+# Pull the roborev review image from ECR and tag as inference-review:latest
+# Usage: just ci-review-pull <ecr-repo-url> [tag]
+ci-review-pull ecr_url tag="latest":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    ECR_REGISTRY=$(echo "{{ecr_url}}" | cut -d'/' -f1)
+    REGION=$(echo "{{ecr_url}}" | cut -d'.' -f4)
+
+    echo "Logging in to ECR..."
+    aws ecr get-login-password --region "$REGION" \
+        | {{container-tool}} login --username AWS --password-stdin "$ECR_REGISTRY"
+
+    echo "Pulling {{ecr_url}}:{{tag}}..."
+    {{container-tool}} pull "{{ecr_url}}:{{tag}}"
+    {{container-tool}} tag "{{ecr_url}}:{{tag}}" inference-review:latest
+    echo "✓ Pulled and tagged as inference-review:latest"
+
 # ==============================================================================
 # Vendored CRDs — Gateway API Inference Extension (InferencePool)
 # ==============================================================================

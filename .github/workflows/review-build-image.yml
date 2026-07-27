@@ -1,0 +1,65 @@
+# Build and publish the roborev review image to ECR.
+#
+# The review image (roborev + claude-code agent + gh) is published occasionally,
+# when its pinned tool versions change, not per PR. roborev-review.yml pulls it
+# from ECR at review time.
+#
+# The build is decoupled from the IaC state: it only needs the target ECR
+# repository URL, so it assumes the publish role, logs in, builds, and pushes.
+# No terraform/jd state is read, so the publish role needs only ECR push.
+#
+# Prerequisites (one-time, by a maintainer):
+#   - Deploy the jupyter-infra-tf-aws-iam-ci template with create_review_resources
+#     = true, which creates the review ECR repo and the publish role.
+#   - Set these repo variables from the template outputs. Until both are set,
+#     this workflow is inert:
+#       REVIEW_PUBLISH_ROLE_ARN  <- review_publish_iam_role_arn
+#       REVIEW_ECR_REPOSITORY    <- review_image_repository_url
+#       REVIEW_AWS_REGION        <- region (optional; defaults to us-east-1)
+#   - Trigger once via workflow_dispatch to publish the first image; thereafter it
+#     rebuilds automatically on pushes to main that touch the review image files.
+
+name: Build review image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/review/**"
+      - ".github/workflows/review-build-image.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and push review image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: vars.REVIEW_PUBLISH_ROLE_ARN != '' && vars.REVIEW_ECR_REPOSITORY != ''
+    environment: review
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install just
+        uses: ./.github/actions/install-just
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.REVIEW_PUBLISH_ROLE_ARN }}
+          aws-region: ${{ vars.REVIEW_AWS_REGION || 'us-east-1' }}
+
+      - name: Pull previous image for cache
+        run: just ci-review-pull "${{ vars.REVIEW_ECR_REPOSITORY }}" || true
+
+      - name: Build review image
+        run: just ci-review-build "${{ vars.REVIEW_ECR_REPOSITORY }}:latest"
+
+      - name: Push to ECR
+        run: just ci-review-push "${{ vars.REVIEW_ECR_REPOSITORY }}" ${{ github.sha }}

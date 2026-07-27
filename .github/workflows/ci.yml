@@ -1,0 +1,23 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# This is a single-package uv workspace, so lint/test run against the repo root
+# ('.'). Contrast jupyter-deploy, which discovers affected lib dirs and fans out a
+# matrix — unnecessary here with one template package.
+jobs:
+  lint:
+    name: Run linters
+    uses: ./.github/workflows/lint.yml
+    with:
+      working-directory: '.'
+
+  test:
+    name: Run tests
+    uses: ./.github/workflows/test.yml
+    with:
+      working-directory: '.'

@@ -1,0 +1,37 @@
+name: install-uv
+description: 'Install UV and set up Python'
+
+inputs:
+  python-version:
+    description: 'Python version to use'
+    required: false
+    default: '3.12'
+  uv-version:
+    description: 'UV version to use'
+    required: false
+    default: '0.7.8'
+  working-directory:
+    description: 'Working directory for installing dependencies'
+    required: false
+    default: '.'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install uv and python
+      id: uv-primary
+      uses: astral-sh/setup-uv@v5
+      continue-on-error: true
+      with:
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+        python-version: ${{ inputs.python-version }}
+        version: ${{ inputs.uv-version }}
+
+    - name: Retry uv install (no cache)
+      if: steps.uv-primary.outcome == 'failure'
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: false
+        python-version: ${{ inputs.python-version }}
+        version: ${{ inputs.uv-version }}
