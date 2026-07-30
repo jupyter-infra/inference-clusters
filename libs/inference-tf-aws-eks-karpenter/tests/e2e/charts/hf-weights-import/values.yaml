@@ -1,0 +1,25 @@
+# Hugging Face weights-ingest fixture. The onboarder vendors the (throwaway) image and,
+# the point of this fixture, STAGES the hf:// weights repo into our S3.
+
+# images: — MANDATED even though we never serve. A trivial Docker Hub image (skopeo pulls
+# it from docker.io in CodeBuild, which has public egress) so the chart conforms and the
+# Path-A `helm template` backstop resolves every ref to our ECR. registry="" => docker.io,
+# so repository must be the Docker Hub path (library/busybox), NOT an ecr-public path.
+images:
+  server:
+    registry: ""
+    repository: library/busybox
+    tag: "1.36"
+
+# weights: — the hf:// staging target. A small, REAL, PUBLIC/UNGATED model
+# (Qwen/Qwen2.5-0.5B-Instruct: ~1 GiB — config + tokenizer + a single safetensors shard).
+# Public + ungated is deliberate: the onboarder snapshot_downloads it via huggingface_hub
+# with CodeBuild's public egress and NO HF token, so the test needs no secret. A real
+# model (not a random-weights stub) faithfully exercises the snapshot -> s5cmd push path,
+# while 0.5B keeps the copy quick; the s3:// scale case is weights-import. The Qwen family
+# also matches the serving tests' models/qwen2.5-7b. name = the models/<name> subdir the
+# workload would read.
+weights:
+  model:
+    source: "hf://Qwen/Qwen2.5-0.5B-Instruct"
+    name: qwen2.5-0.5b-instruct

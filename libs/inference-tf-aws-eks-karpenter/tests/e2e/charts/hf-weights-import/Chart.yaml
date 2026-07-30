@@ -1,0 +1,12 @@
+apiVersion: v2
+name: hf-weights-import
+version: 0.1.0
+description: >-
+  Hugging Face weights-ingest fixture for the onboarder: a conforming chart whose weights:
+  source is an hf:// repo (a small, real, public/ungated model). Exercises the OTHER
+  weight-source scheme from weights-import (which uses a JumpStart s3:// source): the
+  onboarder snapshots the repo via huggingface_hub (CodeBuild public egress, anonymous — no
+  HF token) and s5cmd-pushes it into our S3. The e2e onboards it and asserts the weights
+  land in our S3 — it does NOT serve the model. The image is a throwaway (never pulled); it
+  exists only so the chart conforms and the Path-A backstop renders. A fixture, never shipped.
+type: application

@@ -1,0 +1,20 @@
+# Minimal Deployment so `helm template` (the onboarder's Path-A backstop) has an image
+# ref to render through chart.image. This chart is onboarded for its weights: block, never
+# installed — the image is a throwaway and the deployment is never applied.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: server
+          image: {{ include "chart.image" .Values.images.server }}
