@@ -441,5 +441,58 @@ class TestS3Copy(unittest.TestCase):
         self.assertEqual(len(fake.aborted), 1)
 
 
+class TestIngestWeights(unittest.TestCase):
+    """Runner.ingest_weights dispatch — the Hugging Face (hf://) snapshot+push path and
+    scheme routing. The s3:// path has its own byte-level coverage in TestS3Copy; here we
+    assert the hf:// branch snapshots the repo via huggingface_hub and s5cmd-pushes it to
+    our S3, that a @revision is stripped from the repo id, that dry-run copies nothing, and
+    that an unsupported scheme is rejected. snapshot_download + subprocess are faked so no
+    network / Hub / s5cmd is touched."""
+
+    def test_hf_source_snapshots_then_s5cmd_pushes_to_s3(self) -> None:
+        runner = co.Runner()
+        with (
+            patch.object(co, "snapshot_download") as snap,
+            patch.object(co.subprocess, "run") as run,
+        ):
+            # name (qwen2.5-0.5b-instruct) deliberately differs from the repo leaf
+            # (Qwen2.5-0.5B-Instruct): the staging dir + push target use the models/<name>
+            # subdir the workload reads, lowercased, NOT the raw repo leaf.
+            runner.ingest_weights(
+                "hf://Qwen/Qwen2.5-0.5B-Instruct",
+                f"{MODELS}/qwen2.5-0.5b-instruct",
+                "qwen2.5-0.5b-instruct",
+            )
+        snap.assert_called_once_with(repo_id="Qwen/Qwen2.5-0.5B-Instruct", local_dir="/tmp/hf/qwen2.5-0.5b-instruct")
+        run.assert_called_once_with(
+            ["s5cmd", "cp", "/tmp/hf/qwen2.5-0.5b-instruct/", f"{MODELS}/qwen2.5-0.5b-instruct/"], check=True
+        )
+
+    def test_hf_source_strips_revision_from_repo_id(self) -> None:
+        runner = co.Runner()
+        with (
+            patch.object(co, "snapshot_download") as snap,
+            patch.object(co.subprocess, "run"),
+        ):
+            runner.ingest_weights("hf://Qwen/Qwen2.5-0.5B-Instruct@abc123", f"{MODELS}/qwen", "qwen")
+        # the @revision is not part of the repo id passed to the Hub client
+        snap.assert_called_once_with(repo_id="Qwen/Qwen2.5-0.5B-Instruct", local_dir="/tmp/hf/qwen")
+
+    def test_dry_run_copies_nothing(self) -> None:
+        runner = co.Runner(dry_run=True)
+        with (
+            patch.object(co, "snapshot_download") as snap,
+            patch.object(co.subprocess, "run") as run,
+        ):
+            runner.ingest_weights("hf://Qwen/Qwen2.5-0.5B-Instruct", f"{MODELS}/qwen", "qwen")
+        snap.assert_not_called()
+        run.assert_not_called()
+
+    def test_unsupported_scheme_rejected(self) -> None:
+        runner = co.Runner()
+        with self.assertRaises(SystemExit):
+            runner.ingest_weights("gs://bucket/model", f"{MODELS}/x", "x")
+
+
 if __name__ == "__main__":
     unittest.main()
