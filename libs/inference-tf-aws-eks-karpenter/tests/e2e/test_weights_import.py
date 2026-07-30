@@ -17,9 +17,17 @@ the weights land in our S3. They cover the two source schemes the onboarder supp
       — no HF token) and s5cmd-pushes it into our S3. Asserts the snapshot's signature files
       (config.json + a *.safetensors shard) land. Small enough to fit the default ceiling.
 
-Neither serves the model (a 120B needs P-class GPUs; the 0.5B copy is the thing under test).
+  test_gated_hf_weights_import_streams_to_s3 — GATED hf:// (Hugging Face Hub, token required).
+      meta-llama/Llama-3.2-1B-Instruct. Exercises the token path the public hf:// test can't:
+      the onboarder fetches an HF token from Secrets Manager (hf_token_secret_arn) and passes
+      it to huggingface_hub to download a gated model. SKIP-gated on HF_GATED_E2E — it needs a
+      deployment whose configured token has accepted this model's license.
+
+Neither serves the model (a 120B needs P-class GPUs; the small copies are the thing under test).
 Marked `full_deployment` — runs only against a deployed cluster with full-deploy=true.
 """
+
+import os
 
 import pytest
 from pytest_jupyter_deploy.deployment import EndToEndDeployment
@@ -41,6 +49,12 @@ MAX_POLLS = 270
 # hf://Qwen/Qwen2.5-0.5B-Instruct). ~1 GiB fits the default build ceiling, so no MAX_POLLS.
 HF_CHART = "hf-weights-import"
 HF_WEIGHT_NAME = "qwen2.5-0.5b-instruct"
+
+# gated hf:// case. A GATED model (meta-llama/Llama-3.2-1B-Instruct) whose download requires
+# the HF token the onboarder fetches from Secrets Manager (hf_token_secret_arn). Skip-gated on
+# HF_GATED_E2E. Kept in sync with charts/gated-hf-weights-import/values.yaml.
+GATED_HF_CHART = "gated-hf-weights-import"
+GATED_HF_WEIGHT_NAME = "llama-3.2-1b-instruct"
 
 
 @pytest.mark.full_deployment
@@ -91,6 +105,44 @@ def test_hf_weights_import_streams_to_s3(e2e_deployment: EndToEndDeployment) -> 
 
         # The snapshot's signature files must have landed (not just some bytes): a real HF
         # model repo always carries config.json and its weights as *.safetensors shard(s).
+        keys = h.s3_prefix_keys(dst_uri)
+        leaves = {k.rsplit("/", 1)[-1] for k in keys}
+        assert "config.json" in leaves, f"expected config.json under {dst_uri}, got {sorted(leaves)}"
+        assert any(k.endswith(".safetensors") for k in keys), (
+            f"expected a *.safetensors weights shard under {dst_uri}, got {sorted(leaves)}"
+        )
+    finally:
+        # Purge the copy — pass or fail — so it never lingers in the store.
+        h.delete_s3_prefix(dst_uri)
+
+
+@pytest.mark.full_deployment
+def test_gated_hf_weights_import_streams_to_s3(e2e_deployment: EndToEndDeployment) -> None:
+    """GATED hf:// source: the onboarder fetches an HF token from Secrets Manager
+    (hf_token_secret_arn) and uses it to download a gated model, then s5cmd-pushes it to our
+    S3. This is the ONLY test that exercises the token path (the public hf:// test downloads
+    anonymously).
+
+    SKIP-gated on HF_GATED_E2E because it has two out-of-band prerequisites the harness can't
+    provision: (1) the deployment must set hf_token_secret_arn to a Secrets Manager secret
+    holding an HF token, and (2) that token's account must have accepted
+    meta-llama/Llama-3.2-1B-Instruct's license. Set HF_GATED_E2E=1 once both hold. Asserts the
+    snapshot's signature files (config.json + a *.safetensors shard) land under models/<name>."""
+    if not os.environ.get("HF_GATED_E2E"):
+        pytest.skip(
+            "HF_GATED_E2E not set: the gated-model e2e needs a deployment configured with "
+            "hf_token_secret_arn whose token has accepted meta-llama/Llama-3.2-1B-Instruct"
+        )
+    e2e_deployment.ensure_deployed()
+    region = h.jd_output(e2e_deployment, "region")
+
+    dst_uri = f"{h.jd_output(e2e_deployment, 'models_s3_uri')}/{GATED_HF_WEIGHT_NAME}"
+    try:
+        # Onboard: the onboarder pulls the token from Secrets Manager and downloads the gated
+        # repo via huggingface_hub, then s5cmd-pushes it to our S3.
+        overrides = h.onboard_chart(e2e_deployment, region, GATED_HF_CHART)
+        assert dst_uri in overrides.read_text(), f"overrides must repoint weights at {dst_uri}"
+
         keys = h.s3_prefix_keys(dst_uri)
         leaves = {k.rsplit("/", 1)[-1] for k in keys}
         assert "config.json" in leaves, f"expected config.json under {dst_uri}, got {sorted(leaves)}"
