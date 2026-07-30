@@ -1,0 +1,13 @@
+apiVersion: v2
+name: gated-hf-weights-import
+version: 0.1.0
+description: >-
+  Gated Hugging Face weights-ingest fixture for the onboarder: a conforming chart whose
+  weights: source is a GATED hf:// repo (meta-llama/Llama-3.2-1B-Instruct). Exercises the
+  onboarder's token path — it fetches an HF token from Secrets Manager (hf_token_secret_arn)
+  and passes it to huggingface_hub to download a gated model. The e2e that uses this
+  (test_gated_hf_weights_import_streams_to_s3) is skip-gated on HF_GATED_E2E and requires the
+  deployment to have hf_token_secret_arn set to a token that has been granted access to this
+  model. It does NOT serve the model. The image is a throwaway (never pulled); it exists only
+  so the chart conforms and the Path-A backstop renders. A fixture, never shipped.
+type: application

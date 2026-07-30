@@ -1,0 +1,23 @@
+# Gated Hugging Face weights-ingest fixture. The onboarder vendors the (throwaway) image
+# and, the point of this fixture, STAGES a GATED hf:// weights repo into our S3 using an HF
+# token fetched from Secrets Manager (hf_token_secret_arn).
+
+# images: — MANDATED even though we never serve. A trivial Docker Hub image (skopeo pulls
+# it from docker.io in CodeBuild, which has public egress) so the chart conforms and the
+# Path-A `helm template` backstop resolves every ref to our ECR. registry="" => docker.io,
+# so repository must be the Docker Hub path (library/busybox), NOT an ecr-public path.
+images:
+  server:
+    registry: ""
+    repository: library/busybox
+    tag: "1.36"
+
+# weights: — a GATED model (meta-llama/Llama-3.2-1B-Instruct). Downloading it requires an
+# HF token that has accepted the model's license; the onboarder fetches that token from
+# Secrets Manager (HF_TOKEN_SECRET_ARN / hf_token_secret_arn) at build time and passes it to
+# huggingface_hub. The e2e is skip-gated on HF_GATED_E2E and assumes the deployment's token
+# has access to this repo. name = the models/<name> subdir the workload would read.
+weights:
+  model:
+    source: "hf://meta-llama/Llama-3.2-1B-Instruct"
+    name: llama-3.2-1b-instruct
