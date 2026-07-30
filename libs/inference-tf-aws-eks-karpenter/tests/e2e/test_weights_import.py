@@ -18,7 +18,7 @@ the weights land in our S3. They cover the two source schemes the onboarder supp
       (config.json + a *.safetensors shard) land. Small enough to fit the default ceiling.
 
   test_gated_hf_weights_import_streams_to_s3 — GATED hf:// (Hugging Face Hub, token required).
-      meta-llama/Llama-3.2-1B-Instruct. Exercises the token path the public hf:// test can't:
+      google/gemma-3-270m-it. Exercises the token path the public hf:// test can't:
       the onboarder fetches an HF token from Secrets Manager (hf_token_secret_arn) and passes
       it to huggingface_hub to download a gated model. SKIP-gated on HF_GATED_E2E — it needs a
       deployment whose configured token has accepted this model's license.
@@ -50,11 +50,11 @@ MAX_POLLS = 270
 HF_CHART = "hf-weights-import"
 HF_WEIGHT_NAME = "qwen2.5-0.5b-instruct"
 
-# gated hf:// case. A GATED model (meta-llama/Llama-3.2-1B-Instruct) whose download requires
-# the HF token the onboarder fetches from Secrets Manager (hf_token_secret_arn). Skip-gated on
+# gated hf:// case. A GATED model (google/gemma-3-270m-it) whose download requires the HF
+# token the onboarder fetches from Secrets Manager (hf_token_secret_arn). Skip-gated on
 # HF_GATED_E2E. Kept in sync with charts/gated-hf-weights-import/values.yaml.
 GATED_HF_CHART = "gated-hf-weights-import"
-GATED_HF_WEIGHT_NAME = "llama-3.2-1b-instruct"
+GATED_HF_WEIGHT_NAME = "gemma-3-270m-it"
 
 
 @pytest.mark.full_deployment
@@ -126,12 +126,12 @@ def test_gated_hf_weights_import_streams_to_s3(e2e_deployment: EndToEndDeploymen
     SKIP-gated on HF_GATED_E2E because it has two out-of-band prerequisites the harness can't
     provision: (1) the deployment must set hf_token_secret_arn to a Secrets Manager secret
     holding an HF token, and (2) that token's account must have accepted
-    meta-llama/Llama-3.2-1B-Instruct's license. Set HF_GATED_E2E=1 once both hold. Asserts the
+    google/gemma-3-270m-it's license. Set HF_GATED_E2E=1 once both hold. Asserts the
     snapshot's signature files (config.json + a *.safetensors shard) land under models/<name>."""
     if not os.environ.get("HF_GATED_E2E"):
         pytest.skip(
             "HF_GATED_E2E not set: the gated-model e2e needs a deployment configured with "
-            "hf_token_secret_arn whose token has accepted meta-llama/Llama-3.2-1B-Instruct"
+            "hf_token_secret_arn whose token has accepted google/gemma-3-270m-it"
         )
     e2e_deployment.ensure_deployed()
     region = h.jd_output(e2e_deployment, "region")
