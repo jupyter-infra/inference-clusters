@@ -3,7 +3,7 @@ name: gated-hf-weights-import
 version: 0.1.0
 description: >-
   Gated Hugging Face weights-ingest fixture for the onboarder: a conforming chart whose
-  weights: source is a GATED hf:// repo (meta-llama/Llama-3.2-1B-Instruct). Exercises the
+  weights: source is a GATED hf:// repo (google/gemma-3-270m-it). Exercises the
   onboarder's token path — it fetches an HF token from Secrets Manager (hf_token_secret_arn)
   and passes it to huggingface_hub to download a gated model. The e2e that uses this
   (test_gated_hf_weights_import_streams_to_s3) is skip-gated on HF_GATED_E2E and requires the
