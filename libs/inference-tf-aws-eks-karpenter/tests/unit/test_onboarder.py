@@ -17,7 +17,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import yaml
 from botocore.exceptions import ClientError
@@ -463,7 +463,9 @@ class TestIngestWeights(unittest.TestCase):
                 f"{MODELS}/qwen2.5-0.5b-instruct",
                 "qwen2.5-0.5b-instruct",
             )
-        snap.assert_called_once_with(repo_id="Qwen/Qwen2.5-0.5B-Instruct", local_dir="/tmp/hf/qwen2.5-0.5b-instruct")
+        snap.assert_called_once_with(
+            repo_id="Qwen/Qwen2.5-0.5B-Instruct", local_dir="/tmp/hf/qwen2.5-0.5b-instruct", token=None
+        )
         run.assert_called_once_with(
             ["s5cmd", "cp", "/tmp/hf/qwen2.5-0.5b-instruct/", f"{MODELS}/qwen2.5-0.5b-instruct/"], check=True
         )
@@ -476,7 +478,7 @@ class TestIngestWeights(unittest.TestCase):
         ):
             runner.ingest_weights("hf://Qwen/Qwen2.5-0.5B-Instruct@abc123", f"{MODELS}/qwen", "qwen")
         # the @revision is not part of the repo id passed to the Hub client
-        snap.assert_called_once_with(repo_id="Qwen/Qwen2.5-0.5B-Instruct", local_dir="/tmp/hf/qwen")
+        snap.assert_called_once_with(repo_id="Qwen/Qwen2.5-0.5B-Instruct", local_dir="/tmp/hf/qwen", token=None)
 
     def test_dry_run_copies_nothing(self) -> None:
         runner = co.Runner(dry_run=True)
@@ -492,6 +494,54 @@ class TestIngestWeights(unittest.TestCase):
         runner = co.Runner()
         with self.assertRaises(SystemExit):
             runner.ingest_weights("gs://bucket/model", f"{MODELS}/x", "x")
+
+    def test_hf_gated_token_fetched_from_secrets_and_forwarded(self) -> None:
+        """When HF_TOKEN_SECRET_ARN is set, the token is fetched from Secrets Manager and
+        passed as snapshot_download(token=...) — never via the environment."""
+        runner = co.Runner()
+        fake_secrets = MagicMock()
+        fake_secrets.get_secret_value.return_value = {"SecretString": "hf_secret_token"}
+        runner._secrets_client = fake_secrets  # inject the double; no real boto3 / creds
+        arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:hf-token-abc"
+        with (
+            patch.dict("os.environ", {"HF_TOKEN_SECRET_ARN": arn}),
+            patch.object(co, "snapshot_download") as snap,
+            patch.object(co.subprocess, "run"),
+        ):
+            runner.ingest_weights("hf://meta-llama/Llama-3.2-1B", f"{MODELS}/llama-3.2-1b", "llama-3.2-1b")
+        fake_secrets.get_secret_value.assert_called_once_with(SecretId=arn)
+        snap.assert_called_once_with(
+            repo_id="meta-llama/Llama-3.2-1B", local_dir="/tmp/hf/llama-3.2-1b", token="hf_secret_token"
+        )
+
+    def test_hf_anonymous_when_secret_arn_unset(self) -> None:
+        """No HF_TOKEN_SECRET_ARN => token is None (anonymous) and no Secrets Manager client
+        is ever constructed (public path unchanged)."""
+        runner = co.Runner()
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch.object(co, "snapshot_download") as snap,
+            patch.object(co.subprocess, "run"),
+        ):
+            runner.ingest_weights("hf://Qwen/Qwen2.5-0.5B-Instruct", f"{MODELS}/qwen", "qwen")
+        snap.assert_called_once_with(repo_id="Qwen/Qwen2.5-0.5B-Instruct", local_dir="/tmp/hf/qwen", token=None)
+        self.assertIsNone(runner._secrets_client)
+
+    def test_hf_gated_token_fetched_once_across_weights(self) -> None:
+        """A multi-weight chart fetches the secret once (cached), not per weight."""
+        runner = co.Runner()
+        fake_secrets = MagicMock()
+        fake_secrets.get_secret_value.return_value = {"SecretString": "hf_secret_token"}
+        runner._secrets_client = fake_secrets
+        arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:hf-token-abc"
+        with (
+            patch.dict("os.environ", {"HF_TOKEN_SECRET_ARN": arn}),
+            patch.object(co, "snapshot_download"),
+            patch.object(co.subprocess, "run"),
+        ):
+            runner.ingest_weights("hf://org/model-a", f"{MODELS}/a", "a")
+            runner.ingest_weights("hf://org/model-b", f"{MODELS}/b", "b")
+        fake_secrets.get_secret_value.assert_called_once()
 
 
 if __name__ == "__main__":

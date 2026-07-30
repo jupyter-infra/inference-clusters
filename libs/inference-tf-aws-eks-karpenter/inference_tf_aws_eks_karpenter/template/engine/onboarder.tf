@@ -56,6 +56,18 @@ data "aws_iam_policy_document" "onboarder_extra" {
     actions   = ["s3:PutObject", "s3:AbortMultipartUpload"]
     resources = ["${module.model_store.bucket_arn}/*"]
   }
+  # Read the HF-token secret ONLY when one is configured, scoped to that exact ARN (never a
+  # wildcard). Gated on the plan-time-known var so an empty ARN doesn't produce an invalid empty
+  # Resource. KMS caveat: a CMK-encrypted secret also needs the key policy to allow this role.
+  dynamic "statement" {
+    for_each = var.hf_token_secret_arn != "" ? [var.hf_token_secret_arn] : []
+    content {
+      sid       = "ReadHFTokenSecret"
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = [statement.value]
+    }
+  }
 }
 
 locals {
@@ -92,6 +104,10 @@ module "onboarder" {
     MODELS_S3_URI   = local.models_s3_uri
     REHOST_IN       = local.rehost_in_s3_uri
     REHOST_OUT      = local.rehost_out_s3_uri
+    # Optional Secrets Manager ARN (NOT the token — just the non-secret ARN) whose plaintext
+    # value is an HF token; onboarder.py fetches it at runtime for gated hf:// downloads and
+    # passes it directly to the HF client. Empty => anonymous (public repos only).
+    HF_TOKEN_SECRET_ARN = var.hf_token_secret_arn
     # Tags applied to every workload/* ECR repo the job creates (same tag set as all other
     # deployment resources) — so the repos are attributable + reapable by DeploymentId.
     # JSON-encoded map; onboarder.py decodes it into `aws ecr create-repository --tags`.

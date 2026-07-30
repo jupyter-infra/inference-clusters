@@ -295,6 +295,30 @@ def test_onboarder_iam_scopes_workload_ecr_and_bucket() -> None:
     assert "AmazonS3ReadOnlyAccess" in content, "weight-source reads come from the managed policy"
 
 
+def test_onboarder_hf_token_secret_optional_and_scoped() -> None:
+    """Gated HF support: an OPTIONAL hf_token_secret_arn variable feeds a plaintext ARN env var
+    (never the token), a Secrets Manager GetSecretValue grant gated on the var and scoped to the
+    ARN (never '*'), and onboarder.py fetches the token to pass to snapshot_download (never env)."""
+    variables = (ENGINE / "variables.tf").read_text()
+    assert 'variable "hf_token_secret_arn"' in variables, "must declare the optional hf_token_secret_arn variable"
+    assert re.search(r'hf_token_secret_arn\s*=\s*""', (ENGINE / "presets" / "defaults-all.tfvars").read_text()), (
+        "hf_token_secret_arn default must be empty (feature disabled by default)"
+    )
+
+    content = (ENGINE / "onboarder.tf").read_text()
+    assert "HF_TOKEN_SECRET_ARN = var.hf_token_secret_arn" in content, "onboarder must receive the ARN as an env var"
+    doc = _extract_block(content, "data", "aws_iam_policy_document", "onboarder_extra")
+    assert "secretsmanager:GetSecretValue" in doc, "onboarder must be granted GetSecretValue for the HF token"
+    assert 'var.hf_token_secret_arn != ""' in doc, "the secret grant must be gated on the var being set"
+    assert "statement.value" in doc and '"*"' not in doc, "the secret grant must be ARN-scoped, never '*'"
+
+    script = (ENGINE / "onboarder.py").read_text()
+    assert "get_secret_value" in script and "HF_TOKEN_SECRET_ARN" in script, "onboarder.py must fetch the HF token"
+    assert "token=self._hf_token()" in script, (
+        "the fetched token must be passed to snapshot_download(token=...), not exported to the env"
+    )
+
+
 # --- Control-loop placement + HA (system MNG, leader-elected → 2 replicas) ---
 
 

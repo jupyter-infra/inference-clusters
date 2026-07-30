@@ -516,3 +516,25 @@ variable "efa_device_plugin_image_tag" {
   EOT
   type        = string
 }
+
+# === Onboarder: gated Hugging Face model access ===
+
+variable "hf_token_secret_arn" {
+  description = <<-EOT
+    Optional AWS Secrets Manager secret (ARN or name) holding a Hugging Face token.
+
+    The secret's plaintext value MUST be the token itself (a single-value secret, not
+    JSON) — create it with e.g. `aws secretsmanager create-secret --name <name>
+    --secret-string <hf_token>`. When set, the onboarder CodeBuild job is granted
+    secretsmanager:GetSecretValue on this ARN and fetches the token at build time to
+    download GATED hf:// models/weights; the token is passed directly to the Hugging Face
+    client and never placed in an environment variable or the build log. Empty = no token
+    (only public/ungated hf:// repos and s3:// sources work).
+
+    If the secret is encrypted with a customer-managed KMS key, that key's policy must also
+    allow this deployment's onboarder role to kms:Decrypt.
+
+    Recommended: ""
+  EOT
+  type        = string
+}
