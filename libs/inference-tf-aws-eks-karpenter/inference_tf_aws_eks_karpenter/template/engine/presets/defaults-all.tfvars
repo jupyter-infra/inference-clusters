@@ -91,3 +91,8 @@ efa_device_plugin_image_tag     = "v0.5.20" # chart v0.5.30 appVersion; vendored
 
 # --- GPU node image-pull acceleration (SOCI snapshotter parallel pull/unpack) ---
 gpu_parallel_image_pull = true
+
+# --- Onboarder: gated Hugging Face access (optional) ---
+# Empty = no token (public/ungated hf:// + s3:// only). Set to a Secrets Manager
+# secret (ARN or name) whose plaintext value is an HF token to onboard gated models.
+hf_token_secret_arn = ""
