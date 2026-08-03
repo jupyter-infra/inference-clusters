@@ -177,6 +177,16 @@ output "onboarder_codebuild_project" {
   value       = module.onboarder.project_name
 }
 
+output "image_build_codebuild_project" {
+  description = "Name of the image-build CodeBuild project that builds a source dir (uploaded to image-build/in) into a workload/* ECR image. For images with no published upstream to import."
+  value       = module.image_build.project_name
+}
+
+output "image_build_input_s3_uri" {
+  description = "S3 URI prefix a consumer uploads its build source tarball (Dockerfile + context) to before triggering the image-build job."
+  value       = local.image_build_in_s3_uri
+}
+
 output "models_s3_uri" {
   description = "S3 URI prefix where the onboard job copies the model weights."
   value       = local.models_s3_uri

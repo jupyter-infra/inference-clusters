@@ -25,6 +25,7 @@ from pytest_jupyter_deploy.kubernetes.kubectl import run_kubectl
 
 CHARTS_DIR = Path(__file__).resolve().parent / "charts"  # Path-A Helm chart fixtures
 GRAPHS_DIR = Path(__file__).resolve().parent / "graphs"  # Path-B KRO graph fixtures (no Chart.yaml)
+SOURCES_DIR = Path(__file__).resolve().parent / "sources"  # image-build source-dir fixtures (Dockerfile + context)
 # Static YAML manifests the tests kubectl-apply (never inline heredocs in a test body).
 RESOURCES_DIR = Path(__file__).resolve().parent / "resources"
 NAMESPACE = "default"
@@ -204,6 +205,66 @@ def onboard_chart(e2e: EndToEndDeployment, region: str, chart_name: str, max_pol
     tgz = next(Path("/tmp").glob(f"{chart_name}-*.tgz"))
     subprocess.run(["aws", "s3", "cp", str(tgz), f"{in_uri}/{chart_name}.tgz"], check=True, capture_output=True)
     return _run_onboard_build(e2e, region, f"{chart_name}.tgz", chart_name, "overrides.yaml", max_polls=max_polls)
+
+
+def build_image(
+    e2e: EndToEndDeployment, region: str, source_name: str, image_name: str, image_tag: str, max_polls: int = 60
+) -> str:
+    """Build a source-dir fixture (sources/<source_name>) into <ecr>/workload/<image_name>:<tag>
+    via the image-build CodeBuild job, and return the pushed image ref.
+
+    This is the worked example of the image-build contract a consumer follows:
+      1. tar the source dir (Dockerfile + any build context / wheels)
+      2. upload it to the image-build input prefix (image_build_input_s3_uri)
+      3. `aws codebuild start-build` with SOURCE_REF + IMAGE_NAME + IMAGE_TAG overrides
+      4. poll to completion
+    The source is a RUNTIME S3 upload (never terraform state), so it works across repos.
+    """
+    project = jd_output(e2e, "image_build_codebuild_project")
+    in_uri = jd_output(e2e, "image_build_input_s3_uri")
+    registry = jd_output(e2e, "ecr_registry")
+    workload_prefix = jd_output(e2e, "workload_repo_prefix")
+
+    src_dir = _stage_fixture(SOURCES_DIR / source_name)
+    tgz = Path(tempfile.mkdtemp(prefix="e2e-imgbuild-")) / "source.tgz"
+    subprocess.run(["tar", "-czf", str(tgz), "-C", str(src_dir), "."], check=True, capture_output=True)
+    source_ref = f"{in_uri}/{image_name}/source.tgz"
+    subprocess.run(["aws", "s3", "cp", str(tgz), source_ref], check=True, capture_output=True)
+
+    build_id = subprocess.run(
+        [
+            "aws", "codebuild", "start-build", "--project-name", project, "--region", region,
+            "--environment-variables-override",
+            f"name=SOURCE_REF,value={source_ref},type=PLAINTEXT",
+            f"name=IMAGE_NAME,value={image_name},type=PLAINTEXT",
+            f"name=IMAGE_TAG,value={image_tag},type=PLAINTEXT",
+            "--query", "build.id", "--output", "text",
+        ],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+    status = "IN_PROGRESS"
+    for _ in range(max_polls):
+        status = subprocess.run(
+            ["aws", "codebuild", "batch-get-builds", "--ids", build_id, "--region", region,
+             "--query", "builds[0].buildStatus", "--output", "text"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        if status != "IN_PROGRESS":
+            break
+        time.sleep(20)
+    assert status == "SUCCEEDED", f"image-build {build_id} ended {status}"
+    return f"{registry}/{workload_prefix}/{image_name}:{image_tag}"
+
+
+def ecr_image_exists(region: str, repository: str, tag: str) -> bool:
+    """Whether a specific tag exists in an ECR repo (asserts an image-build published)."""
+    r = subprocess.run(
+        ["aws", "ecr", "describe-images", "--repository-name", repository, "--region", region,
+         "--image-ids", f"imageTag={tag}", "--query", "imageDetails[0].imageDigest", "--output", "text"],
+        capture_output=True, text=True,
+    )
+    return r.returncode == 0 and r.stdout.strip() not in ("", "None")
 
 
 def s3_prefix_stats(uri: str) -> tuple[int, int]:

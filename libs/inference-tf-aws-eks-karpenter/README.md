@@ -155,6 +155,7 @@ project for descriptions and recommended values. Grouped by concern:
 | `batch_storage_config_map_name` | ConfigMap of batch bucket names and AWS Region |
 | `models_s3_uri` / `onboarder_input_s3_uri` / `onboarder_output_s3_uri` | Model-onboarding S3 locations |
 | `onboarder_codebuild_project` | CodeBuild project that stages models/images |
+| `image_build_codebuild_project` / `image_build_input_s3_uri` | CodeBuild project that builds a consumer-uploaded source dir into a workload/* ECR image, + the S3 prefix to upload source to |
 | `ecr_registry` / `workload_repo_prefix` | ECR registry + workload repo prefix |
 | `trusted_upstream_registries` | Registries the onboarder may pull from |
 | `*_ecr_repository` | Vendored-image ECR repos (KEDA, Grafana, DCGM, device-plugin) |
