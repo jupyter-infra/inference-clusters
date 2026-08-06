@@ -64,7 +64,13 @@ def _stage_fixture(src_dir: Path) -> Path:
     shutil.copytree(src_dir, tmp)
     bucket = jumpstart_bucket()
     for path in tmp.rglob("*"):
-        if path.is_file() and JUMPSTART_BUCKET_PLACEHOLDER in (text := path.read_text()):
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text()
+        except UnicodeDecodeError:
+            continue  # binary fixture file (e.g. a .whl) — no text placeholder to substitute
+        if JUMPSTART_BUCKET_PLACEHOLDER in text:
             path.write_text(text.replace(JUMPSTART_BUCKET_PLACEHOLDER, bucket))
     return tmp
 
@@ -225,7 +231,10 @@ def build_image(
     registry = jd_output(e2e, "ecr_registry")
     workload_prefix = jd_output(e2e, "workload_repo_prefix")
 
-    src_dir = _stage_fixture(SOURCES_DIR / source_name)
+    # Tar the fixture dir directly — NOT via _stage_fixture: that helper read_text()s
+    # every file for placeholder substitution and would choke on binary build context
+    # (e.g. a .whl), and an image-build source has no ${JUMPSTART_*} placeholder anyway.
+    src_dir = SOURCES_DIR / source_name
     tgz = Path(tempfile.mkdtemp(prefix="e2e-imgbuild-")) / "source.tgz"
     subprocess.run(["tar", "-czf", str(tgz), "-C", str(src_dir), "."], check=True, capture_output=True)
     source_ref = f"{in_uri}/{image_name}/source.tgz"
