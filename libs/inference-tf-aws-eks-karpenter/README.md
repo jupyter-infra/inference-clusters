@@ -135,6 +135,7 @@ project for descriptions and recommended values. Grouped by concern:
 | Batch / multi-node | `enable_lws`, `lws_chart_version`, `enable_kueue`, `kueue_chart_version`, `kueue_cluster_queue_name`, `gpu_g_capacity`, `gpu_p_capacity`, `kueue_gpu_lending_limit`, `enable_efa`, `efa_device_plugin_chart_version`, `efa_device_plugin_image_tag` |
 | Storage / images | `mountpoint_s3_csi_version`, `common_images`, `workload_namespace` |
 | Inference routing | `enable_inference_routing` |
+| Onboarder | `hf_token_secret_arn` |
 
 ## Outputs
 

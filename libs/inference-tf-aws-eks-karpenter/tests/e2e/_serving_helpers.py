@@ -341,6 +341,21 @@ def s3_prefix_stats(uri: str) -> tuple[int, int]:
     return count, total
 
 
+def s3_prefix_keys(uri: str) -> list[str]:
+    """Return every object key under an s3:// prefix (recursive), for asserting WHICH files
+    an import landed (not just the count). Lets an hf:// import check that a real snapshot's
+    signature files — config.json, a *.safetensors shard — actually arrived, rather than
+    only that some bytes did.
+
+    Uses the cached boto3 client's paginator (like s3_put/delete_object) — cleaner than
+    text-splitting `aws s3api` output when we need the keys themselves."""
+    bucket, _, prefix = uri[len("s3://") :].partition("/")
+    keys: list[str] = []
+    for page in _s3_client().get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+        keys.extend(obj["Key"] for obj in page.get("Contents", []))
+    return keys
+
+
 def delete_s3_prefix(uri: str) -> None:
     """Recursively delete every object under an s3:// prefix (test cleanup for a large
     weights import, so a 100s-of-GB copy never lingers and accrues cost). check=True so a
