@@ -13,7 +13,7 @@
 #      to s3://<store>/image-build/in/<name>/source.tgz
 #   2. consumer runs `aws codebuild start-build` with SOURCE_REF + IMAGE_NAME + TAG
 #   3. this job: s3 cp the tarball, unpack, `docker build`, push to
-#      <ecr>/workload/<name>:<tag> (+ :latest)
+#      <ecr>/workload/<name>:<tag>
 # Downstream the result is an ordinary workload image, imported/pulled like any other.
 #
 # Build runs in CodeBuild (public egress, where pip/apt/base-image pulls work) — NOT
@@ -99,8 +99,15 @@ module "image_build" {
           # Create the repo (idempotent) WITH the deployment tags, so imperatively-created
           # workload/* repos are attributable + reapable by DeploymentId (matches the
           # onboarder; the only cleanup handle since these repos are not in TF state).
+          # Tolerate ONLY the describe->create race (RepositoryAlreadyExistsException) —
+          # any other create error (perms, quota, invalid name) must fail the build, not
+          # be swallowed by a blanket `|| true` and surface later as a confusing push error.
           - 'TAG_ARGS=$(echo "$RESOURCE_TAGS_JSON" | python3 -c "import json,sys; t=json.load(sys.stdin); print(chr(32).join(f\"Key={k},Value={v}\" for k,v in t.items()))")'
-          - 'aws ecr describe-repositories --repository-names "$DST_REPO" --region $AWS_DEFAULT_REGION >/dev/null 2>&1 || aws ecr create-repository --repository-name "$DST_REPO" --region $AWS_DEFAULT_REGION --tags $TAG_ARGS >/dev/null 2>&1 || true'
+          - |
+            if ! aws ecr describe-repositories --repository-names "$DST_REPO" --region $AWS_DEFAULT_REGION >/dev/null 2>&1; then
+              CREATE_ERR=$(aws ecr create-repository --repository-name "$DST_REPO" --region $AWS_DEFAULT_REGION --tags $TAG_ARGS 2>&1 >/dev/null) || \
+                echo "$CREATE_ERR" | grep -q RepositoryAlreadyExistsException || { echo "ERROR: ECR create-repository failed: $CREATE_ERR"; exit 1; }
+            fi
       build:
         commands:
           - 'mkdir -p /tmp/src'
