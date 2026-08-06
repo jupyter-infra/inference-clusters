@@ -96,7 +96,11 @@ module "image_build" {
         commands:
           - 'aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY'
           - 'DST_REPO="$WORKLOAD_PREFIX/$IMAGE_NAME"'
-          - 'aws ecr describe-repositories --repository-names "$DST_REPO" --region $AWS_DEFAULT_REGION >/dev/null 2>&1 || aws ecr create-repository --repository-name "$DST_REPO" --region $AWS_DEFAULT_REGION >/dev/null 2>&1 || true'
+          # Create the repo (idempotent) WITH the deployment tags, so imperatively-created
+          # workload/* repos are attributable + reapable by DeploymentId (matches the
+          # onboarder; the only cleanup handle since these repos are not in TF state).
+          - 'TAG_ARGS=$(echo "$RESOURCE_TAGS_JSON" | python3 -c "import json,sys; t=json.load(sys.stdin); print(chr(32).join(f\"Key={k},Value={v}\" for k,v in t.items()))")'
+          - 'aws ecr describe-repositories --repository-names "$DST_REPO" --region $AWS_DEFAULT_REGION >/dev/null 2>&1 || aws ecr create-repository --repository-name "$DST_REPO" --region $AWS_DEFAULT_REGION --tags $TAG_ARGS >/dev/null 2>&1 || true'
       build:
         commands:
           - 'mkdir -p /tmp/src'
