@@ -242,22 +242,46 @@ def build_image(
 
     build_id = subprocess.run(
         [
-            "aws", "codebuild", "start-build", "--project-name", project, "--region", region,
+            "aws",
+            "codebuild",
+            "start-build",
+            "--project-name",
+            project,
+            "--region",
+            region,
             "--environment-variables-override",
             f"name=SOURCE_REF,value={source_ref},type=PLAINTEXT",
             f"name=IMAGE_NAME,value={image_name},type=PLAINTEXT",
             f"name=IMAGE_TAG,value={image_tag},type=PLAINTEXT",
-            "--query", "build.id", "--output", "text",
+            "--query",
+            "build.id",
+            "--output",
+            "text",
         ],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
 
     status = "IN_PROGRESS"
     for _ in range(max_polls):
         status = subprocess.run(
-            ["aws", "codebuild", "batch-get-builds", "--ids", build_id, "--region", region,
-             "--query", "builds[0].buildStatus", "--output", "text"],
-            check=True, capture_output=True, text=True,
+            [
+                "aws",
+                "codebuild",
+                "batch-get-builds",
+                "--ids",
+                build_id,
+                "--region",
+                region,
+                "--query",
+                "builds[0].buildStatus",
+                "--output",
+                "text",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
         ).stdout.strip()
         if status != "IN_PROGRESS":
             break
@@ -269,9 +293,23 @@ def build_image(
 def ecr_image_exists(region: str, repository: str, tag: str) -> bool:
     """Whether a specific tag exists in an ECR repo (asserts an image-build published)."""
     r = subprocess.run(
-        ["aws", "ecr", "describe-images", "--repository-name", repository, "--region", region,
-         "--image-ids", f"imageTag={tag}", "--query", "imageDetails[0].imageDigest", "--output", "text"],
-        capture_output=True, text=True,
+        [
+            "aws",
+            "ecr",
+            "describe-images",
+            "--repository-name",
+            repository,
+            "--region",
+            region,
+            "--image-ids",
+            f"imageTag={tag}",
+            "--query",
+            "imageDetails[0].imageDigest",
+            "--output",
+            "text",
+        ],
+        capture_output=True,
+        text=True,
     )
     return r.returncode == 0 and r.stdout.strip() not in ("", "None")
 
