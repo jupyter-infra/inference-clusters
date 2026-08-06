@@ -7,6 +7,8 @@ They run inside the pytest-jupyter-deploy E2E container.
 
 import re
 
+import pytest
+from pytest_jupyter_deploy.cli import JDCliError
 from pytest_jupyter_deploy.deployment import EndToEndDeployment
 from pytest_jupyter_deploy.undeployed_project import undeployed_project
 
@@ -63,3 +65,17 @@ def test_project_is_configurable(e2e_deployment: EndToEndDeployment) -> None:
     with undeployed_project(e2e_deployment.suite_config) as (project_path, cli):
         e2e_deployment.configure_project(cli=cli)
         assert (project_path / "engine").exists(), "engine/ should exist after config"
+
+
+def test_pool_list_fails_gracefully_when_not_deployed(e2e_deployment: EndToEndDeployment) -> None:
+    """`jd pool list` on an initialized-but-undeployed project fails gracefully.
+
+    pool.list reads terraform outputs (cluster_name) and the pool.status is-mng flag reads
+    platform_mng_names.
+    """
+    # No `jd up` — outputs don't exist yet. The command must exit non-zero cleanly.
+    with (
+        undeployed_project(e2e_deployment.suite_config) as (_project_path, cli),
+        pytest.raises(JDCliError),
+    ):
+        cli.run_command(["jupyter-deploy", "pool", "list"])

@@ -35,6 +35,54 @@ values:
   source-key: kubeconfig_path
 project-store:
   store-type: s3-only
+# jd pool status: normalize both pool wirings onto one Ready/Creating/Degraded vocabulary.
+pool-status-rules:
+# Karpenter NodePool aggregates ValidationSucceeded + NodeClassReady into a
+# single Ready condition (True / Unknown while reconciling / False on failure).
+- display: Ready
+  all:
+  - path: .status.conditions[type=Ready].status
+    equals: "True"
+- display: Creating
+  all:
+  - path: .status.conditions[type=Ready].status
+    equals: Unknown
+- display: Degraded
+  all:
+  - path: .status.conditions[type=Ready].status
+    equals: "False"
+# EKS managed node group status: boto3 DescribeNodegroup exposes a bare string `.status`.
+# Karpenter's `.status` is an object, so resolve_path's string-leaf gate never matches these
+# rules against a NodePool (and vice-versa). All seven boto3 states are mapped onto the
+# existing Ready/Creating/Degraded vocabulary (no MNG-only display words).
+- display: Ready
+  all:
+  - path: .status
+    equals: ACTIVE
+- display: Creating
+  all:
+  - path: .status
+    equals: CREATING
+- display: Creating
+  all:
+  - path: .status
+    equals: UPDATING
+- display: Degraded
+  all:
+  - path: .status
+    equals: DEGRADED
+- display: Degraded
+  all:
+  - path: .status
+    equals: DELETING
+- display: Degraded
+  all:
+  - path: .status
+    equals: CREATE_FAILED
+- display: Degraded
+  all:
+  - path: .status
+    equals: DELETE_FAILED
 commands:
 - cmd: cluster.login
   sequence:
@@ -81,6 +129,104 @@ commands:
   - result-name: cluster.show.version
     source: result
     source-key: '[0].Version'
+# jd pool list/status: surface EVERY pool of hosts through one interface, blind to the
+# subsystem backing each — the EKS managed node group (`platform`, read via the AWS EKS
+# API) AND the Karpenter NodePools (`cpu`, `gpu-g`, `gpu-p`, read via the k8s custom API).
+- cmd: pool.list
+  # Merge every pool of hosts into one flat name list, blind to which subsystem backs it:
+  # the managed node group(s) [0] AND Karpenter NodePools [1], concatenated [2].
+  # MNGs are listed first (list_1) so the platform node group heads the output.
+  sequence:
+  - api-name: aws.eks.list-nodegroups        # [0] managed node groups
+    arguments:
+    - api-attribute: cluster_name
+      source: output
+      source-key: cluster_name
+  - api-name: k8s.custom.list-cluster        # [1] Karpenter NodePools
+    arguments:
+    - api-attribute: group
+      source: literal
+      value: karpenter.sh
+    - api-attribute: version
+      source: literal
+      value: v1
+    - api-attribute: plural
+      source: literal
+      value: nodepools
+  - api-name: core.concat-lists-of-str       # [2] concat [0].Names (MNG) + [1].Names (Karpenter)
+    arguments:
+    - api-attribute: list_1
+      source: result
+      source-key: '[0].Names'
+    - api-attribute: list_2
+      source: result
+      source-key: '[1].Names'
+  results:
+  - result-name: pool.list
+    source: result
+    source-key: '[2].Names'
+- cmd: pool.status
+  # Branch by pool type: is-mng is true when the requested name is one of the managed node
+  # groups. The Karpenter branch [0] runs when !is-mng, the MNG branch [1] when is-mng, then
+  # coalesce picks whichever branch ran (resource [2] and name [3]).
+  flags:
+  - name: is-mng
+    conditions:
+    - left:
+        source: cli
+        source-key: name
+      operator: in
+      right:
+        source: output
+        source-key: platform_mng_names
+  sequence:
+  - api-name: k8s.custom.get-cluster         # [0] Karpenter branch
+    when: "!is-mng"
+    arguments:
+    - api-attribute: group
+      source: literal
+      value: karpenter.sh
+    - api-attribute: version
+      source: literal
+      value: v1
+    - api-attribute: plural
+      source: literal
+      value: nodepools
+    - api-attribute: name
+      source: cli
+      source-key: name
+  - api-name: aws.eks.describe-nodegroup     # [1] MNG branch
+    when: is-mng
+    arguments:
+    - api-attribute: cluster_name
+      source: output
+      source-key: cluster_name
+    - api-attribute: nodegroup_name
+      source: cli
+      source-key: name
+  - api-name: core.coalesce-str                # [2] resource of whichever branch ran
+    arguments:
+    - api-attribute: value_1
+      source: result
+      source-key: '[0].Resource'
+    - api-attribute: value_2
+      source: result
+      source-key: '[1].Resource'
+  - api-name: core.coalesce-str                # [3] name of whichever branch ran
+    arguments:
+    - api-attribute: value_1
+      source: result
+      source-key: '[0].Name'
+    - api-attribute: value_2
+      source: result
+      source-key: '[1].NodegroupName'
+  results:
+  - result-name: pool.status.name
+    source: result
+    source-key: '[3].Value'
+  - result-name: pool.status.resource
+    source: result
+    source-key: '[2].Value'
 - cmd: host.list
   sequence:
   - api-name: k8s.core.list-nodes

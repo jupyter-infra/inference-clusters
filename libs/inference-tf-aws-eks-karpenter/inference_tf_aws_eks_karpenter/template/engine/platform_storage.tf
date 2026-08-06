@@ -139,11 +139,17 @@ resource "aws_iam_role_policy" "batch_s3" {
   policy = data.aws_iam_policy_document.batch_s3.json
 }
 
+# depends_on kubernetes_namespace_v1.workload (not just the implicit namespace-string
+# interpolation): the namespace resource carries the admin-access-association + node-group
+# guards, so chaining through it keeps the K8s provider authorized and the nodes alive
+# until these objects are deleted on `jd down` (the eks-oidc issue #333 destroy-order lesson).
 resource "kubernetes_service_account_v1" "batch_inference" {
   metadata {
     name      = local.batch_inference_service_account_name
     namespace = kubernetes_namespace_v1.workload.metadata[0].name
   }
+
+  depends_on = [kubernetes_namespace_v1.workload]
 }
 
 resource "kubernetes_config_map_v1" "batch_storage" {
@@ -158,6 +164,8 @@ resource "kubernetes_config_map_v1" "batch_storage" {
     BATCH_INTAKE_BUCKET = module.batch_intake.bucket_name
     BATCH_OUTPUT_BUCKET = module.batch_output.bucket_name
   }
+
+  depends_on = [kubernetes_namespace_v1.workload]
 }
 
 resource "aws_eks_pod_identity_association" "batch_inference" {

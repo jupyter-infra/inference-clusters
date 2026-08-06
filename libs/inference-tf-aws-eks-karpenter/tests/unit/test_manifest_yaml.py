@@ -1,5 +1,6 @@
 """Tests that the template manifest and variables files are well-formed."""
 
+import re
 import unittest
 from enum import StrEnum
 from pathlib import Path
@@ -7,7 +8,9 @@ from typing import Any
 
 import hcl2
 import yaml
+from jupyter_deploy import manifest_validation
 from jupyter_deploy.handlers import base_project_handler
+from jupyter_deploy.manifest import JupyterDeployManifestV1
 
 from inference_tf_aws_eks_karpenter.template import TEMPLATE_PATH
 
@@ -36,7 +39,7 @@ class TestManifest(unittest.TestCase):
         "cluster_ca_certificate",
         "kubeconfig_path",
     ]
-    EXPECTED_COMMANDS = ["cluster.login", "cluster.status", "cluster.show", "host.list"]
+    EXPECTED_COMMANDS = ["cluster.login", "cluster.status", "cluster.show", "host.list", "pool.list", "pool.status"]
     # jd health wiring: the components/images layers + their backing commands. jd derives a
     # cmd name from `component.<type>.<verb>` / `image.<verb>`, so every verb a component
     # declares needs its matching cmd block below.
@@ -143,6 +146,53 @@ class TestManifest(unittest.TestCase):
         command_names = [cmd.get("cmd") for cmd in self.MANIFEST.get("commands", [])]
         for expected in self.EXPECTED_COMMANDS:
             self.assertIn(expected, command_names)
+
+    def test_command_output_references_have_matching_terraform_outputs(self) -> None:
+        """Every `source: output` reference inside a command must resolve to a terraform output.
+
+        Broader than test_value_source_keys_are_real_terraform_outputs (which only checks
+        top-level `values`): commands read outputs directly — a command arg, or a flag
+        condition operand like pool.status's `platform_mng_names` — with no `values` entry.
+        """
+        assert self.MANIFEST is not None
+        outputs_tf = (TEMPLATE_PATH / "engine" / "outputs.tf").read_text()
+        tf_output_names = set(re.findall(r'^output "(\w+)"', outputs_tf, re.MULTILINE))
+
+        def _iter_output_refs(node: Any) -> list[str]:
+            """Collect the source-key of every {source: output, ...} mapping, recursively."""
+            refs: list[str] = []
+            if isinstance(node, dict):
+                if node.get("source") == "output" and "source-key" in node:
+                    refs.append(node["source-key"])
+                for value in node.values():
+                    refs.extend(_iter_output_refs(value))
+            elif isinstance(node, list):
+                for item in node:
+                    refs.extend(_iter_output_refs(item))
+            return refs
+
+        for command in self.MANIFEST.get("commands", []):
+            for source_key in _iter_output_refs(command):
+                self.assertIn(
+                    source_key,
+                    tf_output_names,
+                    f"Command '{command['cmd']}' references output '{source_key}' not found in outputs.tf",
+                )
+
+    def test_pool_commands_pass_grammar_validation(self) -> None:
+        """pool.* flags/conditions/when composition must be well-formed (CI/test-time gate)."""
+        manifest = JupyterDeployManifestV1.model_validate(self.MANIFEST)
+        manifest_validation.validate_manifest(manifest)  # no raise
+
+    def test_pool_status_rules_cover_all_mng_states(self) -> None:
+        """MNG bare-string .status rules cover all seven boto3 states, mapped to Ready/Creating/Degraded."""
+        assert self.MANIFEST is not None
+        rules = self.MANIFEST.get("pool-status-rules", [])
+        mng_states = {match["equals"] for rule in rules for match in rule["all"] if match["path"] == ".status"}
+        self.assertEqual(
+            mng_states,
+            {"ACTIVE", "CREATING", "UPDATING", "DEGRADED", "DELETING", "CREATE_FAILED", "DELETE_FAILED"},
+        )
 
     def test_engine_is_terraform(self) -> None:
         assert self.MANIFEST is not None

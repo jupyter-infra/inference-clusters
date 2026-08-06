@@ -145,6 +145,7 @@ project for descriptions and recommended values. Grouped by concern:
 | `cluster_name` | EKS cluster name |
 | `cluster_endpoint` | EKS API server endpoint |
 | `cluster_arn` | EKS cluster ARN |
+| `platform_mng_names` | Names of the EKS managed node groups (backs `jd pool status`) |
 | `cluster_ca_certificate` | Cluster CA certificate (base64) |
 | `vpc_id` | VPC ID |
 | `kubeconfig_path` | Path to the generated kubeconfig |

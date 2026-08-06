@@ -245,8 +245,12 @@ locals {
 module "node_group" {
   source = "./modules/node_group"
 
-  cluster_name    = module.eks_cluster.cluster_name
-  node_group_name = "${local.cluster_name}-system"
+  cluster_name = module.eks_cluster.cluster_name
+  # Static "platform" (not "${cluster_name}-system") so `jd pool list` reads cleanly:
+  # node group names are unique per-CLUSTER, not per-account (ARN embeds the cluster +
+  # a uuid), so two stacks each having a "platform" node group is safe. The MNG carries
+  # the inference/role=system taint/label regardless of its EKS-facing name.
+  node_group_name = "platform"
   node_role_arn   = module.node_role.role_arn
   subnet_ids      = module.vpc.private_subnet_ids
   instance_types  = var.bootstrap_instance_types
