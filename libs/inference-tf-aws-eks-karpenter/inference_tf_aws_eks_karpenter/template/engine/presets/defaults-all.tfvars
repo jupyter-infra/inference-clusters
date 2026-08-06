@@ -1,7 +1,7 @@
 region              = "us-west-2"
 cluster_name_prefix = "inference"
 kubernetes_version  = "1.36"
-karpenter_version   = "1.13.0"
+karpenter_version   = "1.14.0"
 custom_tags         = {}
 
 # --- Control-plane endpoint: open knock-surface, IAM access entries gate ---
@@ -22,12 +22,12 @@ admin_role_names = []
 admin_user_names = []
 
 # --- Karpenter / platform charts ---
-metrics_server_chart_version     = "3.12.2"
-cluster_autoscaler_chart_version = "9.58.0"
+metrics_server_chart_version     = "3.13.1"
+cluster_autoscaler_chart_version = "9.59.0"
 
 # --- GPU serving path: always on (GPUs are mandatory for inference) ---
-nvidia_device_plugin_version       = "v0.17.1"
-nvidia_device_plugin_chart_version = "0.17.1"
+nvidia_device_plugin_version       = "v0.19.3"
+nvidia_device_plugin_chart_version = "0.19.3"
 
 # --- High-end GPU pool: p4d/p5/p5en, gated. The pool CR is free until a pod
 # opts in (nvidia-p label + taint), so default-on is cost-safe. Set an ODCR id to pin
@@ -39,10 +39,10 @@ gpu_p_capacity_reservation_id = ""
 mountpoint_s3_csi_version = "v2.7.0-eksbuild.1"
 
 # --- Observability: kube-prometheus-stack + DCGM + Container Insights ---
-kube_prometheus_stack_chart_version = "87.6.0"
-dcgm_exporter_chart_version         = "4.8.2"
-nvidia_dcgm_exporter_version        = "4.5.3-4.8.2-distroless"
-grafana_version                     = "13.1.0" # must match the chart's Grafana appVersion
+kube_prometheus_stack_chart_version = "88.1.5"
+dcgm_exporter_chart_version         = "4.8.3"
+nvidia_dcgm_exporter_version        = "4.6.0-4.8.3-distroless"
+grafana_version                     = "13.1.2" # must match the chart's Grafana appVersion
 prometheus_retention                = "15d"
 prometheus_memory_limit             = "6Gi"
 enable_container_insights           = true
@@ -53,8 +53,8 @@ enable_container_insights           = true
 # this same tag (== chart appVersion). KRO: resource orchestration; chart + controller
 # image both on registry.k8s.io/kro (pull-through, no vendoring). Image tag is the
 # chart appVersion prefixed with "v" (registry.k8s.io/kro/kro:v<version>).
-keda_chart_version = "2.20.1"
-kro_chart_version  = "0.9.2"
+keda_chart_version = "2.20.2"
+kro_chart_version  = "0.9.3"
 
 # --- Inference-routing (opt-in, off by default) ---
 # Gateway API Inference Extension (InferencePool) CRDs, for KV-aware / disaggregated
@@ -80,11 +80,11 @@ enable_lws        = false
 lws_chart_version = "0.9.0"
 
 enable_kueue             = false
-kueue_chart_version      = "0.18.2"
+kueue_chart_version      = "0.19.0"
 kueue_cluster_queue_name = "inference-gpu"
 kueue_gpu_lending_limit  = 0
 workload_namespace       = "inference"
 
 enable_efa                      = false
-efa_device_plugin_chart_version = "v0.5.29"
-efa_device_plugin_image_tag     = "v0.5.20" # chart v0.5.29 appVersion; vendored into ECR
+efa_device_plugin_chart_version = "v0.5.30"
+efa_device_plugin_image_tag     = "v0.5.20" # chart v0.5.30 appVersion; vendored into ECR

@@ -42,7 +42,7 @@ variable "karpenter_version" {
   description = <<-EOT
     The version of the Karpenter Helm chart to install.
 
-    Recommended: 1.13.0
+    Recommended: 1.14.0
   EOT
   type        = string
 }
@@ -146,7 +146,7 @@ variable "metrics_server_chart_version" {
   description = <<-EOT
     The Helm chart version for metrics-server (HPA + kubectl top).
 
-    Recommended: 3.12.2
+    Recommended: 3.13.1
   EOT
   type        = string
 }
@@ -157,7 +157,7 @@ variable "cluster_autoscaler_chart_version" {
 
     The image tag is derived from kubernetes_version (v<minor>.0), not this chart version.
 
-    Recommended: 9.58.0
+    Recommended: 9.59.0
   EOT
   type        = string
 }
@@ -166,7 +166,7 @@ variable "nvidia_device_plugin_version" {
   description = <<-EOT
     The nvcr.io/nvidia/k8s-device-plugin image tag to vendor into ECR.
 
-    Recommended: v0.17.1
+    Recommended: v0.19.3
   EOT
   type        = string
 }
@@ -175,7 +175,7 @@ variable "nvidia_device_plugin_chart_version" {
   description = <<-EOT
     The Helm chart version for the NVIDIA device plugin.
 
-    Recommended: 0.17.1
+    Recommended: 0.19.3
   EOT
   type        = string
 }
@@ -193,7 +193,7 @@ variable "nvidia_dcgm_exporter_version" {
   description = <<-EOT
     The nvcr.io/nvidia/k8s/dcgm-exporter image tag to vendor into ECR (GPU metrics).
 
-    Recommended: 4.5.3-4.8.2-distroless
+    Recommended: 4.6.0-4.8.3-distroless
   EOT
   type        = string
 }
@@ -202,7 +202,7 @@ variable "kube_prometheus_stack_chart_version" {
   description = <<-EOT
     The Helm chart version for kube-prometheus-stack (Prometheus + Grafana + Alertmanager).
 
-    Recommended: 87.6.0
+    Recommended: 88.1.5
   EOT
   type        = string
 }
@@ -211,7 +211,7 @@ variable "dcgm_exporter_chart_version" {
   description = <<-EOT
     The Helm chart version for the NVIDIA DCGM exporter.
 
-    Recommended: 4.8.2
+    Recommended: 4.8.3
   EOT
   type        = string
 }
@@ -223,7 +223,7 @@ variable "grafana_version" {
     Grafana has no no-creds registry, so it is vendored. This MUST match the
     kube-prometheus-stack chart's Grafana appVersion.
 
-    Recommended: 13.1.0
+    Recommended: 13.1.2
   EOT
   type        = string
 }
@@ -265,7 +265,7 @@ variable "keda_chart_version" {
     The chart appVersion equals this, and it is also the image tag vendored into
     ECR (KEDA images are published only to ghcr.io, so all three are vendored).
 
-    Recommended: 2.20.1
+    Recommended: 2.20.2
   EOT
   type        = string
 }
@@ -277,7 +277,7 @@ variable "kro_chart_version" {
     Both the chart and image come from registry.k8s.io/kro and are reached via ECR
     pull-through.
 
-    Recommended: 0.9.2
+    Recommended: 0.9.3
   EOT
   type        = string
 }
@@ -389,7 +389,7 @@ variable "kueue_chart_version" {
 
     Published to registry.k8s.io (pull-through, no vendoring).
 
-    Recommended: 0.18.2
+    Recommended: 0.19.0
   EOT
   type        = string
 }
@@ -499,7 +499,7 @@ variable "efa_device_plugin_chart_version" {
     is repinned to it. Chart version diverges from the image appVersion — set
     the image tag via efa_device_plugin_image_tag.
 
-    Recommended: v0.5.29
+    Recommended: v0.5.30
   EOT
   type        = string
 }
@@ -512,7 +512,7 @@ variable "efa_device_plugin_image_tag" {
     (not the chart version). It is vendored from the inferred EKS regional ECR
     into our own ECR, and the release's image.tag is pinned to it.
 
-    Recommended: v0.5.20 (appVersion of chart v0.5.29)
+    Recommended: v0.5.20 (appVersion of chart v0.5.30)
   EOT
   type        = string
 }
