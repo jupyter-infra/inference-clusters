@@ -1,7 +1,7 @@
-"""Live E2E for gpu_parallel_image_pull (containerd 2.2 parallel download/unpack on gpu/gpu-p).
+"""Live E2E for gpu_parallel_image_pull (SOCI snapshotter parallel pull/unpack on gpu/gpu-p).
 
 Non-mutating: a GPU pod pulls+serves on a real node, then we read that node's containerd config.
-Mutating: flip the flag off/on and assert the block enters gpu+gpu-p userData, never cpu.
+Mutating: flip the flag off/on and assert the FastImagePull gate enters gpu+gpu-p userData, never cpu.
 """
 
 import pytest
@@ -10,15 +10,9 @@ from pytest_jupyter_deploy.kubernetes.kubectl import run_kubectl
 
 from tests.e2e import _serving_helpers as h
 
-# The containerd settings the feature writes: discard_unpacked_layers=false routes pod pulls
-# through the transfer service (EKS defaults it true, which forces local mode), and the transfer
-# plugin carries the raised concurrency. Values are the chart defaults (gpuParallelPull).
-EXPECTED_CONTAINERD_SETTINGS = (
-    "discard_unpacked_layers = false",
-    "max_concurrent_downloads = 20",
-    "concurrent_layer_fetch_buffer = 16777216",
-    "max_concurrent_unpacks = 5",
-)
+# nodeadm's FastImagePull gate switches containerd to the SOCI snapshotter; the node's
+# effective config shows it as the CRI snapshotter.
+EXPECTED_CONTAINERD_SETTINGS = ('snapshotter = "soci"',)
 
 PROBE = "gpu-parallel-pull-probe"  # matches metadata.name in gpu-parallel-pull-probe.yaml
 
@@ -116,7 +110,7 @@ def test_parallel_pull_flag_toggles_gpu_userdata_only(
     Reverts to on (the default) at the end so the cluster returns to base state for later tests.
     """
     e2e_deployment.ensure_deployed()
-    marker = "io.containerd.transfer.v1.local"
+    marker = "FastImagePull"
 
     try:
         # OFF: no GPU class carries the block.
@@ -125,15 +119,13 @@ def test_parallel_pull_flag_toggles_gpu_userdata_only(
         for cls in ("gpu", "gpu-p"):
             assert marker not in _ec2nodeclass_userdata(cls), f"{cls} userData should NOT have parallel-pull when off"
 
-        # ON: gpu + gpu-p carry the block with the expected values; cpu never does.
+        # ON: gpu + gpu-p carry the FastImagePull gate; cpu never does.
         e2e_deployment.update_override_value("gpu_parallel_image_pull", True)
         e2e_deployment.ensure_deployed_with([], timeout_seconds=900)
         for cls in ("gpu", "gpu-p"):
             ud = _ec2nodeclass_userdata(cls)
-            assert marker in ud, f"{cls} userData missing parallel-pull block when on"
-            for setting in EXPECTED_CONTAINERD_SETTINGS:
-                assert setting in ud, f"{cls} userData missing '{setting}'\n--- userData ---\n{ud}"
-        assert marker not in _ec2nodeclass_userdata("cpu"), "cpu userData must NEVER carry the parallel-pull block"
+            assert marker in ud, f"{cls} userData missing the FastImagePull gate when on\n--- userData ---\n{ud}"
+        assert marker not in _ec2nodeclass_userdata("cpu"), "cpu userData must NEVER carry the FastImagePull gate"
     finally:
         # Restore the default (on) regardless of outcome.
         e2e_deployment.update_override_value("gpu_parallel_image_pull", True)

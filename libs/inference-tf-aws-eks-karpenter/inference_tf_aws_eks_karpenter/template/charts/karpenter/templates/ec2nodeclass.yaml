@@ -9,9 +9,9 @@ Both discover subnets + SG via karpenter.sh/discovery, attach the shared node
 role, and use a large gp3 root. Karpenter generates the join NodeConfig userData.
 */ -}}
 {{- /*
-Partial NodeConfig (parallel image pull) for the GPU classes, merged with Karpenter's
-cluster-join config. discard_unpacked_layers=false keeps pod pulls on the transfer service
-(EKS defaults it true, which forces slower local pull mode); the transfer plugin sets concurrency.
+Partial NodeConfig enabling the SOCI snapshotter (parallel pull/unpack) on the GPU classes,
+merged with Karpenter's cluster-join config. On AL2023 nodeadm's FastImagePull feature gate
+turns on SOCI parallel mode, concurrently downloading+unpacking multi-GB GPU/ML image layers.
 */ -}}
 {{- define "karpenter.gpuParallelPullUserData" -}}
 {{- if .Values.gpuParallelPull.enabled }}
@@ -19,14 +19,8 @@ cluster-join config. discard_unpacked_layers=false keeps pod pulls on the transf
     apiVersion: node.eks.aws/v1alpha1
     kind: NodeConfig
     spec:
-      containerd:
-        config: |
-          [plugins.'io.containerd.cri.v1.images']
-          discard_unpacked_layers = false
-          [plugins.'io.containerd.transfer.v1.local']
-          max_concurrent_downloads = {{ .Values.gpuParallelPull.maxConcurrentDownloads | int64 }}
-          concurrent_layer_fetch_buffer = {{ .Values.gpuParallelPull.layerFetchBufferBytes | int64 }}
-          max_concurrent_unpacks = {{ .Values.gpuParallelPull.maxConcurrentUnpacks | int64 }}
+      featureGates:
+        FastImagePull: true
 {{- end }}
 {{- end -}}
 apiVersion: karpenter.k8s.aws/v1

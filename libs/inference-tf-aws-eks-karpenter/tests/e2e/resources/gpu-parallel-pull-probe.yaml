@@ -12,6 +12,9 @@ metadata:
   namespace: ${namespace}
   labels:
     app: gpu-parallel-pull-probe
+  annotations:
+    # Keep Karpenter from consolidating the node out from under the test.
+    karpenter.sh/do-not-disrupt: "true"
 spec:
   terminationGracePeriodSeconds: 5
   tolerations:

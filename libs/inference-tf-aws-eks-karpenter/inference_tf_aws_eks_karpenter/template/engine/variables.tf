@@ -519,13 +519,12 @@ variable "efa_device_plugin_image_tag" {
 
 variable "gpu_parallel_image_pull" {
   description = <<-EOT
-    Whether to enable containerd parallel image download + unpack on GPU nodes.
+    Whether to enable the SOCI snapshotter (parallel pull/unpack) on GPU nodes.
 
-    GPU/ML container images are multi-GB; the EKS AL2023 AMI ships containerd 2.2
-    with parallel pull built in but OFF by default. When true, the gpu and gpu-p
-    EC2NodeClasses pull and unpack image layers concurrently, cutting multi-minute
-    pulls to seconds. CPU nodes are unaffected. Concurrency uses AWS-recommended
-    defaults.
+    GPU/ML container images are multi-GB. When true, the gpu and gpu-p EC2NodeClasses
+    set nodeadm's FastImagePull feature gate, which on AL2023 turns on SOCI parallel
+    mode: image layers download and unpack concurrently, cutting multi-GB pull times.
+    CPU nodes are unaffected.
 
     Recommended: true
   EOT

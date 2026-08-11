@@ -1,14 +1,13 @@
-"""Opt-in benchmark for gpu_parallel_image_pull (containerd transfer-service parallel pull).
+"""Opt-in benchmark for gpu_parallel_image_pull (SOCI snapshotter parallel pull/unpack).
 
-Validates and measures the feature the way a workload experiences it — a real kubelet pod pull,
-ON vs OFF on the SAME node (only the pull path changes, so hardware/AZ/registry are held constant):
-  1. asserts the booted node routes pod pulls through the transfer service
-     (discard_unpacked_layers=false) with the raised download concurrency (the feature's config);
-  2. times kubelet pulling a large onboarded image via the pod's `Pulled` event (ON);
-  3. flips the node to EKS-default local pull mode in place (containerd restart), re-times (OFF).
+Validates and measures the feature the way a workload experiences it — a real kubelet pod pull:
+  1. asserts the booted GPU node uses the SOCI snapshotter (the FastImagePull gate's effect);
+  2. onboards a large image, evicts it, and times kubelet pulling it via the pod's `Pulled`
+     event (kubelet's real CRI path).
 
-Config assertions are hard; timing is informational. Excluded from the e2e gate by the
-`benchmark` marker; run via `just bench-gpu-parallel-pull`.
+The snapshotter is a bootstrap-time node setting, so timing is an absolute measurement (no
+same-node on/off flip). The config assertion is hard; timing is informational. Excluded from
+the e2e gate by the `benchmark` marker; run via `just bench-gpu-parallel-pull`.
 """
 
 import re
@@ -46,32 +45,18 @@ def test_gpu_parallel_pull_benchmark(
         assert b.wait_pod_ready(h.NAMESPACE, PROBE, timeout_s=600), "probe pod never Ready (no GPU node?)"
         node = h.assert_on_karpenter_gpu(PROBE)
 
-        # 2. Correctness: the booted node routes pod pulls through the transfer service (the
-        #    feature's config), with the raised concurrency.
-        assert b.uses_transfer_service(node, image), (
-            f"{node}: discard_unpacked_layers is not false — pod pulls fell back to local mode, "
-            f"so the transfer-service concurrency does not apply"
+        # 2. Correctness: the booted node uses the SOCI snapshotter (the feature's effect).
+        assert b.uses_soci_snapshotter(node, image), (
+            f"{node}: CRI snapshotter is not 'soci' — the FastImagePull gate did not take effect"
         )
-        dl = b.transfer_max_downloads(node, image)
-        assert dl == 20, f"{node}: transfer max_concurrent_downloads is {dl}, expected 20"
 
-        # 3. ON: time a real kubelet pod pull on the booted (feature-on) node.
+        # 3. Time a real kubelet pod pull on the SOCI-enabled node.
         b.evict_image(node, image, bench_ref)
-        on_s = _time_pod_pull(node, bench_ref)
-        assert on_s > 0, f"ON pod pull of {bench_ref} did not report a Pulled event in time"
+        pull_s = _time_pod_pull(node, bench_ref)
+        assert pull_s > 0, f"pod pull of {bench_ref} did not report a Pulled event in time"
 
-        # 4. OFF: flip the SAME node to EKS-default local pull mode in place, re-measure.
-        b.set_local_pull_fallback(node, image)
-        assert not b.uses_transfer_service(node, image), "OFF flip did not take effect (still transfer mode)"
-        b.evict_image(node, image, bench_ref)
-        off_s = _time_pod_pull(node, bench_ref)
-        b.clear_pull_override(node, image)  # restore booted (feature-on) config
-        assert off_s > 0, f"OFF pod pull of {bench_ref} did not report a Pulled event in time"
-
-        _report(node, bench_ref, dl, on_s, off_s)
+        _report(node, bench_ref, pull_s)
     finally:
-        if node:
-            b.clear_pull_override(node, image)
         run_kubectl("delete", "pod", PULLER, "-n", h.NAMESPACE, "--ignore-not-found", check=False)
         run_kubectl("delete", "pod", PROBE, "-n", h.NAMESPACE, "--ignore-not-found", check=False)
 
@@ -143,17 +128,14 @@ def _bench_image_ref(e2e: EndToEndDeployment) -> str:
     return f"{entry['registry']}/{entry['repository']}{entry['tag']}"
 
 
-def _report(node: str, ref: str, downloads: int, on_s: float, off_s: float) -> None:
+def _report(node: str, ref: str, pull_s: float) -> None:
     """Print the benchmark result (visible with -s / --log-cli-level=INFO)."""
-    speedup = (off_s / on_s) if on_s > 0 else float("nan")
     lines = [
         "",
-        "=== GPU parallel-pull benchmark (same node) ===",
-        f"node:               {node}",
-        f"image:              {ref}",
-        f"ON  (transfer, dl={downloads}):  {on_s:.1f}s",
-        f"OFF (local, EKS default):  {off_s:.1f}s",
-        f"speedup (off/on):   {speedup:.2f}x",
-        "===============================================",
+        "=== GPU SOCI parallel-pull benchmark ===",
+        f"node:              {node}",
+        f"image:             {ref}",
+        f"kubelet pod pull:  {pull_s:.1f}s  (SOCI snapshotter)",
+        "====================================",
     ]
     print("\n".join(lines))
