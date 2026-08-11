@@ -602,8 +602,7 @@ test-e2e-eks-karpenter project_dir="sandbox-e2e" test_filter="" options="":
 # Opt-in GPU parallel-image-pull BENCHMARK (not a pass/fail gate). Runs the tests/load
 # `benchmark`-marked suite against an ALREADY-DEPLOYED project inside the e2e container.
 # Provisions one real GPU node, times cold pulls on-vs-off on the SAME instance, and
-# validates the containerd config. Set BENCH_IMAGE to a large multi-layer image the node
-# can pull (else it onboards the vLLM workload image). Requires `just e2e-up` first.
+# validates the containerd config. Onboards a large image into ECR itself; needs `just e2e-up`.
 # Example: just bench-gpu-parallel-pull sandbox-e2e
 bench-gpu-parallel-pull project_dir="sandbox-e2e":
     #!/usr/bin/env bash
@@ -611,10 +610,30 @@ bench-gpu-parallel-pull project_dir="sandbox-e2e":
     ROOT="{{justfile_directory()}}"
     LOAD_DIR="libs/inference-tf-aws-eks-karpenter/tests/load"
     E2E_IMAGE_DIR="$(uv run python -c 'from pytest_jupyter_deploy.image import IMAGE_PATH; print(IMAGE_PATH)')"
-    COMPOSE="-f $E2E_IMAGE_DIR/docker-compose.yml -f $ROOT/docker-compose.e2e-name.yml"
+    E2E_COMPOSE_FILES="-f $E2E_IMAGE_DIR/docker-compose.yml -f $ROOT/docker-compose.e2e-name.yml"
+
+    # Recreate the container with the project dir mounted (same setup test-e2e uses).
+    OVERRIDE_FILE="$ROOT/docker-compose.e2e-override.yml"
+    printf 'services:\n  e2e:\n    volumes:\n      - ./{{project_dir}}:/workspace/{{project_dir}}\n' > "$OVERRIDE_FILE"
+    trap 'rm -f "$OVERRIDE_FILE"' EXIT
+    mkdir -p ~/.kube
+    {{container-tool}} compose --project-directory "$ROOT" $E2E_COMPOSE_FILES down
+    {{container-tool}} compose --project-directory "$ROOT" $E2E_COMPOSE_FILES -f "$OVERRIDE_FILE" up -d --no-build
+    just e2e-ensure-helm
+    just e2e-sync
+
+    # The container can't run a profile's credential_process (e.g. Isengard's `ada`), so pass
+    # STATIC creds. Resolve them from AWS_PROFILE on the host if that profile is set.
+    if [ -n "${AWS_PROFILE:-}" ]; then eval "$(aws configure export-credentials --profile "$AWS_PROFILE" --format env)"; fi
+
     PYTEST_ARGS="$LOAD_DIR -m benchmark --with-full-deployment --e2e-tests-dir=$LOAD_DIR --e2e-existing-project={{project_dir}} -s --verbose --log-cli-level=INFO"
     echo "Running GPU parallel-pull benchmark (project={{project_dir}})..."
-    {{container-tool}} compose --project-directory "$ROOT" $COMPOSE exec -e PYTHONUNBUFFERED=1 -e BENCH_IMAGE="${BENCH_IMAGE:-}" e2e bash -c "cd /workspace && uv run pytest $PYTEST_ARGS"
+    {{container-tool}} compose --project-directory "$ROOT" $E2E_COMPOSE_FILES exec \
+        -e PYTHONUNBUFFERED=1 \
+        -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}" \
+        -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}" \
+        -e AWS_SESSION_TOKEN="${AWS_SESSION_TOKEN:-}" \
+        e2e bash -c "cd /workspace && uv run pytest $PYTEST_ARGS"
 
 # Full workflow: start container (builds if needed) then run tests
 e2e-all project_dir="sandbox-e2e" test_filter="" options="" no_cache="false" template=default-template:

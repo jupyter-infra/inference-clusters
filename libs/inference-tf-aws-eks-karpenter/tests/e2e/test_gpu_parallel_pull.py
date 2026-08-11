@@ -10,9 +10,11 @@ from pytest_jupyter_deploy.kubernetes.kubectl import run_kubectl
 
 from tests.e2e import _serving_helpers as h
 
-# The three containerd keys the chart writes under [plugins.'io.containerd.transfer.v1.local'].
-# Values are the fixed AWS-recommended defaults (charts/karpenter/values.yaml gpuParallelPull).
+# The containerd settings the feature writes: discard_unpacked_layers=false routes pod pulls
+# through the transfer service (EKS defaults it true, which forces local mode), and the transfer
+# plugin carries the raised concurrency. Values are the chart defaults (gpuParallelPull).
 EXPECTED_CONTAINERD_SETTINGS = (
+    "discard_unpacked_layers = false",
     "max_concurrent_downloads = 20",
     "concurrent_layer_fetch_buffer = 16777216",
     "max_concurrent_unpacks = 5",
@@ -79,22 +81,21 @@ def _assert_image_pulled(pod: str) -> None:
 
 
 def _read_node_containerd_config(node: str, image: str) -> str:
-    """Effective containerd config on a node, via a host-root debug pod (best-effort paths).
+    """Effective (merged) containerd config on a node via `containerd config dump`.
 
     Uses the ECR pull-through busybox (nodes are air-gapped; a public.ecr.aws ref won't pull).
+    config dump reflects nodeadm's merged userData, wherever it landed in the file tree.
     """
     debug = run_kubectl(
         "debug",
         f"node/{node}",
-        "-it",
         f"--image={image}",
         "--",
         "chroot",
         "/host",
         "sh",
         "-c",
-        # nodeadm merges into a drop-in; concatenate the known locations so we see the merged set.
-        "cat /etc/containerd/config.toml /etc/containerd/config.d/*.toml 2>/dev/null",
+        "containerd config dump 2>/dev/null",
         check=False,
     )
     return debug.stdout

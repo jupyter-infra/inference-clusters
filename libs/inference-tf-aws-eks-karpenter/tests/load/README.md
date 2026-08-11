@@ -10,34 +10,28 @@ are excluded from the CI e2e suite by the `benchmark` marker.
 feature (containerd 2.2 parallel download + unpack — see
 [thenewstack.io/accelerating-eks-image-pulls](https://thenewstack.io/accelerating-eks-image-pulls/)).
 
-It provisions **one** real `gpu` node and compares on-vs-off on that **same instance** by
-rolling the config in place. Holding the instance constant keeps instance type / AZ / EBS / NIC
-out of the measurement, leaving the config as the only variable. On that node it:
+It compares ON vs OFF on the **same** `gpu` node — only the pull path changes, so instance type
+/ AZ / EBS / NIC are held constant. On that node it:
 
-1. runs `containerd config dump` to confirm the three keys
-   (`max_concurrent_downloads`, `concurrent_layer_fetch_buffer`, `max_concurrent_unpacks`)
-   are active under the `io.containerd.transfer.v1.local` plugin table, and reports whether
-   CRI image pulls route through the transfer service (which the speedup depends on);
-2. **warms the registry cache once** (a throwaway pull) so neither measured pull pays the
-   upstream/ECR cache-miss — the on/off delta then reflects node-side concurrency, not a
-   first-vs-second caching artifact;
-3. does a cold `crictl pull` of a large multi-layer image (timed, repeated) with parallel-pull
-   **ON** (the booted default);
-4. flips the node's transfer-plugin config to concurrency=1 in place, restarts containerd, and
-   re-measures the **same** image **OFF**; then restores the node's config and reports the delta.
+1. asserts the booted config routes pod pulls through the transfer service
+   (`discard_unpacked_layers = false`, which the feature sets — EKS defaults it `true`, forcing
+   local pull mode) with `max_concurrent_downloads = 20` under the transfer plugin;
+2. onboards a large multi-layer image into ECR, evicts it from the node, and times a **real
+   kubelet pod pull** (the pod's `Pulled` event — kubelet's actual CRI path, not `ctr`) — **ON**;
+3. flips the node to EKS-default local pull mode in place (a conf.d drop-in setting
+   `discard_unpacked_layers = true`, then `systemctl restart containerd`), evicts, re-times — **OFF**;
+   then removes the drop-in and restarts to restore the booted config.
 
-Node-level primitives (debug-exec, config dump, drop-in write, timed pull) live in
-`_bench_helpers.py`; the parallel-pull specifics (the transfer-plugin keys and config block)
-live in the test itself.
+Node-level primitives (debug-exec, config read, image eviction, config flip) live in
+`_bench_helpers.py`; the pod-pull timing and orchestration live in the test.
 
 Run it:
 
 ```bash
-# against an already-deployed project (onboards vllm-qwen to get a large image in ECR)
+# against an already-deployed project (onboards a large image into ECR via the onboarder)
 just bench-gpu-parallel-pull sandbox-e2e
 ```
 
-The benchmark **hard-asserts the config lands correctly** (the keys are active on the node) but
-treats the timing delta as **informational** — it prints a table and only sanity-checks that
-"on" is not slower than "off". It is a measurement tool, not a threshold gate (pull timing is
-too environment-dependent for CI).
+The benchmark **hard-asserts the config is effective** on the node, and reports the ON/OFF pod-pull
+times as **informational** output (no perf threshold — pull timing is too environment-dependent
+for a CI gate).
