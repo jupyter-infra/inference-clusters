@@ -86,9 +86,13 @@ def _read_node_containerd_config(node: str, image: str) -> str:
     Uses the ECR pull-through busybox (nodes are air-gapped; a public.ecr.aws ref won't pull).
     config dump reflects nodeadm's merged userData, wherever it landed in the file tree.
     """
+    # --attach is required: without it `kubectl debug node/` returns only the "Creating..."
+    # notice and the command's stdout is never captured.
     debug = run_kubectl(
         "debug",
         f"node/{node}",
+        "-q",
+        "--attach",
         f"--image={image}",
         "--",
         "chroot",

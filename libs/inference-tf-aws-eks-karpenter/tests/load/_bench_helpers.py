@@ -14,11 +14,16 @@ OFF_DROPIN = "/etc/containerd/conf.d/99-bench-off.toml"
 
 
 def _node_debug(node: str, image: str, script: str) -> str:
-    """Run a shell script on a node's host root via `kubectl debug node/<n>` (chroot /host)."""
+    """Run a shell script on a node's host root via `kubectl debug node/<n>` (chroot /host).
+
+    --attach is required: without it `kubectl debug node/` returns only the "Creating..." notice
+    and the command's stdout is never captured.
+    """
     res = run_kubectl(
         "debug",
         f"node/{node}",
         "-q",
+        "--attach",
         f"--image={image}",
         "--",
         "chroot",
