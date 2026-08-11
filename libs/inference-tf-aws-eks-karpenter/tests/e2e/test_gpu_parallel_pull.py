@@ -22,6 +22,7 @@ def _ec2nodeclass_userdata(name: str) -> str:
     return run_kubectl("get", "ec2nodeclass", name, "-o", "jsonpath={.spec.userData}", check=True).stdout
 
 
+@pytest.mark.gpu
 @pytest.mark.full_deployment
 def test_parallel_pull_serves_on_gpu_node(
     e2e_deployment: EndToEndDeployment,

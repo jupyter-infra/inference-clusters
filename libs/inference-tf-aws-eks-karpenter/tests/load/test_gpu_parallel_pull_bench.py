@@ -21,12 +21,14 @@ from pytest_jupyter_deploy.deployment import EndToEndDeployment
 from pytest_jupyter_deploy.kubernetes.kubectl import run_kubectl
 
 from tests.e2e import _serving_helpers as h
-from tests.load import _bench_helpers as b
 
 PROBE = "gpu-parallel-pull-probe"
 PULLER = "gpu-parallel-pull-timer"
 # Onboard chart (images: only) whose large image gets vendored to this cluster's ECR.
 BENCH_CHART = Path(__file__).resolve().parent / "charts" / "bench-image"
+# containerd's CRI images plugin table (config schema v3). nodeadm's FastImagePull gate sets
+# its snapshotter to "soci" (parallel pull/unpack) — the on-node effect this benchmark verifies.
+CRI_IMAGES_PLUGIN = "io.containerd.cri.v1.images"
 
 
 @pytest.mark.benchmark
@@ -42,16 +44,19 @@ def test_gpu_parallel_pull_benchmark(
     try:
         # 1. One real `gpu` node via a probe pod.
         h.apply_resource("gpu-parallel-pull-probe.yaml", image=image, namespace=h.NAMESPACE)
-        assert b.wait_pod_ready(h.NAMESPACE, PROBE, timeout_s=600), "probe pod never Ready (no GPU node?)"
+        ready = run_kubectl(
+            "wait", f"pod/{PROBE}", "-n", h.NAMESPACE, "--for=condition=Ready", "--timeout=600s", check=False
+        )
+        assert ready.returncode == 0, "probe pod never Ready (no GPU node?)"
         node = h.assert_on_karpenter_gpu(PROBE)
 
         # 2. Correctness: the booted node uses the SOCI snapshotter (the feature's effect).
-        assert b.uses_soci_snapshotter(node, image), (
+        assert _uses_soci_snapshotter(node, image), (
             f"{node}: CRI snapshotter is not 'soci' — the FastImagePull gate did not take effect"
         )
 
         # 3. Time a real kubelet pod pull on the SOCI-enabled node.
-        b.evict_image(node, image, bench_ref)
+        _evict_image(node, image, bench_ref)
         pull_s = _time_pod_pull(node, bench_ref)
         assert pull_s > 0, f"pod pull of {bench_ref} did not report a Pulled event in time"
 
@@ -107,6 +112,35 @@ def _parse_pull_duration(msg: str) -> float | None:
     secs = re.search(r"([\d.]+)s", text)
     total = (int(mins.group(1)) * 60 if mins else 0) + (float(secs.group(1)) if secs else 0.0)
     return total or None
+
+
+def _uses_soci_snapshotter(node: str, image: str) -> bool:
+    """Whether the node's effective containerd config sets the CRI images snapshotter to "soci".
+
+    Scopes the match to the CRI images plugin table so an unrelated soci mention can't false-pass.
+    """
+    dump = h.node_shell(node, image, "containerd config dump 2>/dev/null")
+    return (
+        re.search(
+            rf"\[plugins\.['\"]?{re.escape(CRI_IMAGES_PLUGIN)}['\"]?\].*?snapshotter\s*=\s*['\"]soci['\"]",
+            dump,
+            re.DOTALL,
+        )
+        is not None
+    )
+
+
+def _evict_image(node: str, image: str, ref: str) -> None:
+    """Remove `ref` and prune its layer blobs so the next pull is a true cold pull.
+
+    `images rm` only drops the reference; `content prune references` evicts the unreferenced
+    blobs (without it a re-pull is a warm no-op).
+    """
+    h.node_shell(
+        node,
+        image,
+        f"ctr -n k8s.io images rm {ref} >/dev/null 2>&1; ctr -n k8s.io content prune references >/dev/null 2>&1; true",
+    )
 
 
 def _bench_image_ref(e2e: EndToEndDeployment) -> str:

@@ -99,11 +99,10 @@ def test_health_components_layer(e2e_deployment: EndToEndDeployment) -> None:
     manifest_components = e2e_deployment.get_manifest().get_components()
 
     # DaemonSets on a node that just joined (or, for the GPU-only ones, that has no node at all)
-    # converge on their own schedule; a node-exporter pod on a freshly-joined node reads
-    # in-progress until its image pulls, so budget over a cold image-pull + node-join before we
-    # trust a not-healthy read.
-    interval_s = 10
-    deadline = time.monotonic() + 300
+    # converge on their own schedule; give them a margin over image-pull + node-join before we
+    # trust a Degraded read.
+    interval_s = 5
+    deadline = time.monotonic() + 90
     layers = _components_layers(e2e_deployment)
     while True:
         must_be_healthy = [
