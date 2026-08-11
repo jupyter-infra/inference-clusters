@@ -599,6 +599,23 @@ test-e2e project_dir="sandbox-e2e" test_filter="" options="" template=default-te
 test-e2e-eks-karpenter project_dir="sandbox-e2e" test_filter="" options="":
     @just test-e2e {{project_dir}} "{{test_filter}}" "{{options}}" inference-tf-aws-eks-karpenter
 
+# Opt-in GPU parallel-image-pull BENCHMARK (not a pass/fail gate). Runs the tests/load
+# `benchmark`-marked suite against an ALREADY-DEPLOYED project inside the e2e container.
+# Provisions one real GPU node, times cold pulls on-vs-off on the SAME instance, and
+# validates the containerd config. Set BENCH_IMAGE to a large multi-layer image the node
+# can pull (else it onboards the vLLM workload image). Requires `just e2e-up` first.
+# Example: just bench-gpu-parallel-pull sandbox-e2e
+bench-gpu-parallel-pull project_dir="sandbox-e2e":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ROOT="{{justfile_directory()}}"
+    LOAD_DIR="libs/inference-tf-aws-eks-karpenter/tests/load"
+    E2E_IMAGE_DIR="$(uv run python -c 'from pytest_jupyter_deploy.image import IMAGE_PATH; print(IMAGE_PATH)')"
+    COMPOSE="-f $E2E_IMAGE_DIR/docker-compose.yml -f $ROOT/docker-compose.e2e-name.yml"
+    PYTEST_ARGS="$LOAD_DIR -m benchmark --with-full-deployment --e2e-tests-dir=$LOAD_DIR --e2e-existing-project={{project_dir}} -s --verbose --log-cli-level=INFO"
+    echo "Running GPU parallel-pull benchmark (project={{project_dir}})..."
+    {{container-tool}} compose --project-directory "$ROOT" $COMPOSE exec -e PYTHONUNBUFFERED=1 -e BENCH_IMAGE="${BENCH_IMAGE:-}" e2e bash -c "cd /workspace && uv run pytest $PYTEST_ARGS"
+
 # Full workflow: start container (builds if needed) then run tests
 e2e-all project_dir="sandbox-e2e" test_filter="" options="" no_cache="false" template=default-template:
     @just e2e-up {{no_cache}}

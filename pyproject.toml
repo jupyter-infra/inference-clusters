@@ -67,6 +67,7 @@ testpaths = [
 ]
 markers = [
     "e2e: End-to-end tests against a (real or scaffolded) deployment (deselect with '-m \"not e2e\"')",
+    "benchmark: Opt-in performance benchmarks (not a pass/fail gate; run via 'just bench-*')",
 ]
 
 [tool.uv]
