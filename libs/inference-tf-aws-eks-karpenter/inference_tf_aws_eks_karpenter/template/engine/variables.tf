@@ -527,33 +527,10 @@ variable "gpu_parallel_image_pull" {
     Karpenter's cluster-join config) that pulls and unpacks layers concurrently,
     cutting multi-minute pulls to seconds. CPU nodes are unaffected (small images).
 
+    The concurrency values are the AWS-recommended defaults (baked into the chart,
+    not tunable here).
+
     Recommended: true
   EOT
   type        = bool
-}
-
-variable "gpu_parallel_image_pull_max_downloads" {
-  description = <<-EOT
-    Max concurrent layer downloads per image on GPU nodes (containerd).
-
-    Sets max_concurrent_downloads / max_concurrent_unpacks in the GPU containerd
-    config. Higher values raise peak network, memory, and EBS write pressure during
-    a pull — safe on large GPU instances. Only applied when gpu_parallel_image_pull.
-
-    Recommended: 20
-  EOT
-  type        = number
-}
-
-variable "gpu_parallel_image_pull_layer_buffer_bytes" {
-  description = <<-EOT
-    Per-layer fetch buffer in bytes for GPU-node parallel pulls (containerd).
-
-    Sets concurrent_layer_fetch_buffer. Larger buffers improve throughput on fast
-    networks at the cost of memory during a pull. Only applied when
-    gpu_parallel_image_pull.
-
-    Recommended: 16777216 (16 MiB)
-  EOT
-  type        = number
 }
