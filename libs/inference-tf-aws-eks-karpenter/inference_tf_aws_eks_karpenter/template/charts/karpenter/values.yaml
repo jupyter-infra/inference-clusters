@@ -79,5 +79,9 @@ blockDevice:
 
 # -- Enable the SOCI snapshotter (parallel pull/unpack) on the gpu/gpu-p nodes via nodeadm's
 #    FastImagePull feature gate, concurrently downloading+unpacking large GPU/ML image layers.
+#    SOCI parallel mode buffers layers to disk, so the GPU root volume gets extra EBS gp3
+#    throughput/IOPS (only when enabled) to keep storage from bottlenecking the pull.
 gpuParallelPull:
   enabled: true
+  ebsThroughputMiBps: 600
+  ebsIops: 3000

@@ -23,6 +23,13 @@ turns on SOCI parallel mode, concurrently downloading+unpacking multi-GB GPU/ML 
         FastImagePull: true
 {{- end }}
 {{- end -}}
+{{- /* Extra root-volume EBS throughput/IOPS for SOCI parallel pull (buffers layers to disk). */ -}}
+{{- define "karpenter.gpuEbsTuning" -}}
+{{- if .Values.gpuParallelPull.enabled }}
+        throughput: {{ .Values.gpuParallelPull.ebsThroughputMiBps | int64 }}
+        iops: {{ .Values.gpuParallelPull.ebsIops | int64 }}
+{{- end }}
+{{- end -}}
 apiVersion: karpenter.k8s.aws/v1
 kind: EC2NodeClass
 metadata:
@@ -81,6 +88,7 @@ spec:
         volumeSize: {{ .Values.blockDevice.volumeSizeGi }}Gi
         volumeType: {{ .Values.blockDevice.volumeType }}
         encrypted: true
+{{- include "karpenter.gpuEbsTuning" . }}
   metadataOptions:
     httpEndpoint: enabled
     httpTokens: required
@@ -123,6 +131,7 @@ spec:
         volumeSize: {{ .Values.blockDevice.volumeSizeGi }}Gi
         volumeType: {{ .Values.blockDevice.volumeType }}
         encrypted: true
+{{- include "karpenter.gpuEbsTuning" . }}
   # IMDSv2 with hop limit 2: a CONTAINERIZED process (pod) is one network hop
   # beyond the host, so with the Karpenter default hop limit of 1 a pod cannot reach
   # IMDS → node-role credentials are invisible to pods (S3-direct/SDK "Unable to
