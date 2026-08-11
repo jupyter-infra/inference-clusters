@@ -9,10 +9,9 @@ Both discover subnets + SG via karpenter.sh/discovery, attach the shared node
 role, and use a large gp3 root. Karpenter generates the join NodeConfig userData.
 */ -}}
 {{- /*
-Partial NodeConfig (containerd parallel pull) for the GPU classes; Karpenter merges it with
-its generated cluster-join NodeConfig. EKS sets discard_unpacked_layers=true, which forces
-containerd into local pull mode and bypasses the transfer service; we set it false so pod
-pulls use the transfer service, then raise its download/unpack concurrency for multi-GB images.
+Partial NodeConfig (parallel image pull) for the GPU classes, merged with Karpenter's
+cluster-join config. discard_unpacked_layers=false keeps pod pulls on the transfer service
+(EKS defaults it true, which forces slower local pull mode); the transfer plugin sets concurrency.
 */ -}}
 {{- define "karpenter.gpuParallelPullUserData" -}}
 {{- if .Values.gpuParallelPull.enabled }}
