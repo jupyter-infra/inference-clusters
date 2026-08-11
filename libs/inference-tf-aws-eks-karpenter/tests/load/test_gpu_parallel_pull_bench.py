@@ -1,24 +1,9 @@
-"""Opt-in benchmark — GPU containerd parallel image pull, same-instance rolling comparison.
+"""Opt-in benchmark for gpu_parallel_image_pull (containerd 2.2 parallel download/unpack).
 
-Measures the effect of gpu_parallel_image_pull (containerd 2.2 parallel download + unpack —
-thenewstack.io/accelerating-eks-image-pulls) on a REAL cluster `gpu` node.
-
-Method (same instance held constant, config rolled in place):
-  1. Schedule a GPU probe pod → Karpenter provisions ONE real `gpu` node (the actual cluster
-     def, whatever instance it picks).
-  2. Correctness (the PR-review check): `containerd config dump` proves the three keys land
-     under the ACTIVE io.containerd.transfer.v1.local table; report whether CRI uses the
-     transfer service.
-  3. Timing: WARM the registry cache once (a throwaway pull), then on the SAME node time a
-     cold `crictl pull` with parallel-pull ON, flip the node's config OFF in place
-     (concurrency=1) + restart containerd, and re-time. Warming first means both measured
-     pulls hit the same warm ECR/pull-through cache, so the only variable is node-side
-     download/unpack concurrency — not a first-vs-second cache-miss artifact.
-  4. Restore the node's config; report the delta.
-
-NOT a pass/fail gate: it hard-asserts the config lands (correctness) but treats pull timing as
-informational (pull time is too environment-dependent to threshold). Excluded from the e2e
-suite by the `benchmark` marker; run via `just bench-gpu-parallel-pull`.
+On one real GPU node it asserts the transfer-plugin keys are active in `containerd config
+dump`, then times a cold `crictl pull` with the feature on, flips the node's config off in
+place (same instance, concurrency=1), and re-times. Config lands = hard assert; timing is
+informational. Excluded from the e2e gate by the `benchmark` marker.
 """
 
 import os
@@ -34,14 +19,12 @@ from tests.load import _bench_helpers as b
 PROBE = "gpu-parallel-pull-probe"
 # Repeat each measured pull to smooth registry/network jitter; report the median.
 REPEATS = 3
-# The image to pull-time. Supply a large multi-layer image the node can pull via BENCH_IMAGE;
-# default onboards the vLLM workload image (large, multi-layer, vendored into this cluster's ECR).
+# Image to pull-time (BENCH_IMAGE env); falls back to onboarding the vLLM workload image.
 BENCH_IMAGE_ENV = "BENCH_IMAGE"
 
-# --- Feature-specific config (the thing under test) ---
 TRANSFER_PLUGIN = "io.containerd.transfer.v1.local"
 TRANSFER_KEYS = ("max_concurrent_downloads", "concurrent_layer_fetch_buffer", "max_concurrent_unpacks")
-# Drop-in the benchmark writes to flip the node's config in place (AL2023 nodeadm merge dir).
+# AL2023 nodeadm merges *.toml here into the effective containerd config.
 BENCH_DROPIN = "/etc/containerd/config.d/99-bench-parallel-pull.toml"
 
 
@@ -76,17 +59,13 @@ def test_gpu_parallel_pull_benchmark(
         assert active.get("max_concurrent_unpacks") == 5, f"unpacks not 5 in active config: {active}"
         cri_transfer = _cri_uses_transfer_service(node, image)
 
-        # 3. Warm the registry cache ONCE so neither measured pull pays the upstream cache-miss;
-        #    the on/off delta then reflects node-side concurrency, not first-vs-second caching.
+        # 3. Warm the cache once so both measured pulls hit a warm registry (isolates node-side concurrency).
         warm = b.crictl_pull_seconds(node, image, bench_ref, remove_first=False)
         assert warm > 0, f"warmup pull of {bench_ref} failed — is the image reachable from the node?"
 
-        # ON = booted default; OFF = concurrency forced to 1, rolled in place on the SAME node.
         on_times = _timed_pulls(node, image, bench_ref)
         b.write_containerd_dropin(node, image, BENCH_DROPIN, _transfer_block(1, 1, 0))
-        # GUARD: prove the OFF flip actually took effect in the ACTIVE config before trusting the
-        # OFF timings. If the drop-in was corrupted or config.d isn't imported, OFF would silently
-        # equal ON and the comparison would be meaningless — fail loudly instead.
+        # Confirm the flip is live before trusting OFF timings (else a no-op flip reads as OFF==ON).
         off_active = _assert_transfer_keys_active(node, image)
         assert off_active.get("max_concurrent_downloads") == 1, (
             f"OFF flip did not take effect (active downloads={off_active.get('max_concurrent_downloads')}, "
@@ -98,7 +77,7 @@ def test_gpu_parallel_pull_benchmark(
 
         _report(node, bench_ref, active, cri_transfer, warm, on_times, off_times)
 
-        # Sanity only (NOT a threshold gate): valid timings, and ON not slower than OFF beyond noise.
+        # Sanity, not a perf threshold: timings valid and ON not slower than OFF beyond noise.
         on_med, off_med = _median(on_times), _median(off_times)
         assert on_med > 0 and off_med > 0, f"pull timing failed (on={on_times}, off={off_times})"
         assert on_med <= off_med * 1.25, (
@@ -111,10 +90,8 @@ def test_gpu_parallel_pull_benchmark(
 
 
 def _assert_transfer_keys_active(node: str, image: str) -> dict[str, int]:
-    """Assert the three keys are present under the ACTIVE transfer plugin table in
-    `containerd config dump` (effective merged config), and return the parsed key->value map.
-    The correctness check the PR review asked for: a present key proves it landed active, not
-    just that it was written to a file."""
+    """Assert the transfer-plugin keys appear in `containerd config dump` (the effective merged
+    config, so this proves they are active, not merely written); return the parsed key->value map."""
     dump = b.containerd_config_dump(node, image)
     assert TRANSFER_PLUGIN in dump, (
         f"{node}: '{TRANSFER_PLUGIN}' absent from `containerd config dump` — parallel-pull keys "
@@ -129,8 +106,8 @@ def _assert_transfer_keys_active(node: str, image: str) -> dict[str, int]:
 
 
 def _cri_uses_transfer_service(node: str, image: str) -> bool:
-    """Best-effort: does CRI route image pulls through the transfer service (the PR review's
-    second concern)? containerd 2.x exposes this as use_local_image_pull/image_pull_with_sync."""
+    """Best-effort: does CRI route image pulls through the transfer service? containerd 2.x
+    exposes this as use_local_image_pull/image_pull_with_sync (the speedup depends on it)."""
     dump = b.containerd_config_dump(node, image)
     return "use_local_image_pull = true" in dump or "image_pull_with_sync = true" in dump
 

@@ -523,12 +523,9 @@ variable "gpu_parallel_image_pull" {
 
     GPU/ML container images are multi-GB; the EKS AL2023 AMI ships containerd 2.2
     with parallel pull built in but OFF by default. When true, the gpu and gpu-p
-    EC2NodeClasses inject a nodeadm NodeConfig containerd block (merged with
-    Karpenter's cluster-join config) that pulls and unpacks layers concurrently,
-    cutting multi-minute pulls to seconds. CPU nodes are unaffected (small images).
-
-    The concurrency values are the AWS-recommended defaults (baked into the chart,
-    not tunable here).
+    EC2NodeClasses pull and unpack image layers concurrently, cutting multi-minute
+    pulls to seconds. CPU nodes are unaffected. Concurrency uses AWS-recommended
+    defaults.
 
     Recommended: true
   EOT

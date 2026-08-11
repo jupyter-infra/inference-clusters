@@ -10,15 +10,14 @@ are excluded from the CI e2e suite by the `benchmark` marker.
 feature (containerd 2.2 parallel download + unpack — see
 [thenewstack.io/accelerating-eks-image-pulls](https://thenewstack.io/accelerating-eks-image-pulls/)).
 
-It provisions **one** real `gpu` node (the actual cluster NodeClass — no synthetic pair, so
-instance size is whatever the cluster picks) and compares on-vs-off on that **same instance**
-by rolling the config in place. Holding the instance constant keeps instance type / AZ / EBS /
-NIC out of the measurement — the only variable is the config. On that node it:
+It provisions **one** real `gpu` node and compares on-vs-off on that **same instance** by
+rolling the config in place. Holding the instance constant keeps instance type / AZ / EBS / NIC
+out of the measurement, leaving the config as the only variable. On that node it:
 
 1. runs `containerd config dump` to confirm the three keys
    (`max_concurrent_downloads`, `concurrent_layer_fetch_buffer`, `max_concurrent_unpacks`)
-   land under the **active** `io.containerd.transfer.v1.local` plugin table, and reports
-   whether CRI image pulls honor the transfer service (the correctness check the PR review asked for);
+   are active under the `io.containerd.transfer.v1.local` plugin table, and reports whether
+   CRI image pulls route through the transfer service (which the speedup depends on);
 2. **warms the registry cache once** (a throwaway pull) so neither measured pull pays the
    upstream/ECR cache-miss — the on/off delta then reflects node-side concurrency, not a
    first-vs-second caching artifact;
@@ -28,8 +27,8 @@ NIC out of the measurement — the only variable is the config. On that node it:
    re-measures the **same** image **OFF**; then restores the node's config and reports the delta.
 
 Node-level primitives (debug-exec, config dump, drop-in write, timed pull) live in
-`_bench_helpers.py`, colocated with the test; the parallel-pull specifics (the transfer-plugin
-keys and config block) live in the test itself.
+`_bench_helpers.py`; the parallel-pull specifics (the transfer-plugin keys and config block)
+live in the test itself.
 
 Run it:
 

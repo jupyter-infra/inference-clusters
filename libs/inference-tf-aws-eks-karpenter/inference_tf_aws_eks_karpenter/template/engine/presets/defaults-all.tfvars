@@ -90,5 +90,4 @@ efa_device_plugin_chart_version = "v0.5.30"
 efa_device_plugin_image_tag     = "v0.5.20" # chart v0.5.30 appVersion; vendored into ECR
 
 # --- GPU node image-pull acceleration (containerd 2.2 parallel pull/unpack) ---
-# On/off only (gpu/gpu-p nodes); concurrency values are fixed defaults in the chart.
 gpu_parallel_image_pull = true

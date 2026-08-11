@@ -1,9 +1,6 @@
 """Node-level helpers for the GPU parallel-pull benchmark.
 
-Colocated with their only consumer (test_gpu_parallel_pull_bench.py). These run node-level
-commands via `kubectl debug node` and roll a node's containerd config in place — things the
-pass/fail e2e suite never does. Not promoted to a shared module: there is exactly one consumer
-today; promote if/when a second test actually needs them.
+Run commands on a node's host via `kubectl debug node` and roll its containerd config in place.
 """
 
 import re
@@ -53,12 +50,10 @@ def crictl_pull_seconds(node: str, image: str, ref: str, *, remove_first: bool =
 
 
 def write_containerd_dropin(node: str, image: str, path: str, toml_body: str) -> None:
-    """Write a containerd config drop-in on the node (via a quoted heredoc) and restart containerd.
+    """Write a containerd config drop-in on the node and restart containerd.
 
-    A quoted heredoc (<<'EOF') writes `toml_body` VERBATIM — critical because containerd table
-    paths contain single quotes (e.g. [plugins.'io.containerd.transfer.v1.local']); a
-    single-quoted printf would terminate early and silently corrupt the table into a dotted key.
-    `path` is under /etc/containerd/config.d (AL2023 nodeadm's merge dir).
+    Uses a quoted heredoc so `toml_body` is written verbatim: containerd table paths contain
+    single quotes ([plugins.'io.containerd.transfer.v1.local']) that other quoting would mangle.
     """
     script = (
         f'mkdir -p "$(dirname {path})" && '

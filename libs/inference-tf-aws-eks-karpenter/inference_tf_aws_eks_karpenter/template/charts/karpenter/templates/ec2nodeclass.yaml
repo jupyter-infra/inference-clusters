@@ -9,8 +9,8 @@ Both discover subnets + SG via karpenter.sh/discovery, attach the shared node
 role, and use a large gp3 root. Karpenter generates the join NodeConfig userData.
 */ -}}
 {{- /*
-Partial NodeConfig (containerd parallel pull) for the GPU classes only; Karpenter
-merges it with its cluster-join config, so we supply ONLY the containerd block.
+Partial NodeConfig (containerd parallel pull) for the GPU classes; Karpenter merges
+it with its generated cluster-join NodeConfig, so it carries only the containerd block.
 */ -}}
 {{- define "karpenter.gpuParallelPullUserData" -}}
 {{- if .Values.gpuParallelPull.enabled }}

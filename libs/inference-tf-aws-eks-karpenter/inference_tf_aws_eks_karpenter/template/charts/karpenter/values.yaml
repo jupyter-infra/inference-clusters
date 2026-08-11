@@ -77,8 +77,8 @@ blockDevice:
   volumeSizeGi: 200
   volumeType: gp3
 
-# -- GPU-node containerd 2.2 parallel image pull/unpack (gpu/gpu-p userData only).
-#    Only `enabled` comes from Terraform; the rest are fixed AWS-recommended defaults.
+# -- containerd 2.2 parallel image download/unpack, injected into the gpu/gpu-p
+#    EC2NodeClass userData when enabled. Concurrency values are AWS's recommended defaults.
 gpuParallelPull:
   enabled: true
   maxConcurrentDownloads: 20

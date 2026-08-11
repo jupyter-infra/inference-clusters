@@ -1,15 +1,7 @@
-"""Live E2E — GPU-node containerd parallel image pull (thenewstack.io/accelerating-eks-image-pulls).
+"""Live E2E for gpu_parallel_image_pull (containerd 2.2 parallel download/unpack on gpu/gpu-p).
 
-The gpu_parallel_image_pull flag injects a containerd 2.2 parallel download+unpack block into
-the gpu/gpu-p EC2NodeClass userData ONLY (CPU nodes pull small images and are excluded). Two
-complementary tests:
-
-  - Non-mutating (full_deployment): schedule a GPU pod, read the real node's containerd config,
-    prove the parallel-pull settings actually took effect on the running node.
-  - Mutating: flip the flag off then on, reapply, and assert the block leaves/enters the
-    gpu + gpu-p EC2NodeClass userData and is NEVER present on the cpu class — the on/off contract.
-
-The concurrency values are the AWS-recommended defaults baked into the chart, not jd-tunable.
+Non-mutating: a GPU pod pulls+serves on a real node, then we read that node's containerd config.
+Mutating: flip the flag off/on and assert the block enters gpu+gpu-p userData, never cpu.
 """
 
 import pytest
@@ -39,22 +31,18 @@ def test_parallel_pull_serves_and_config_applies_on_gpu_node(
     e2e_deployment: EndToEndDeployment,
     kubernetes_cluster_login: None,
 ) -> None:
-    """A GPU pod pulls + serves on a Karpenter GPU node, and that node's containerd config
+    """A GPU pod pulls and serves on a Karpenter GPU node, and that node's containerd config
     carries the parallel-pull settings.
 
-    Schedules a single 1-GPU pod so Karpenter provisions a g-tier `gpu` node. The pod runs an
-    httpd with a readiness probe, so pod-Ready proves the image PULLED successfully (the path
-    this feature accelerates) AND the container can serve traffic — which we then confirm by
-    hitting /ping. Finally reads /etc/containerd/config.toml on the node (via `kubectl debug
-    node`) to prove the parallel-pull block was merged by nodeadm and applied, not just declared.
+    A 1-GPU httpd pod with a readiness probe proves the image pulled and serves; reading the
+    node's containerd config then proves the block was applied by nodeadm, not just declared.
     """
     e2e_deployment.ensure_deployed()
     image = h.client_image(e2e_deployment)
 
     try:
         h.apply_resource("gpu-parallel-pull-probe.yaml", image=image, namespace=h.NAMESPACE)
-        # Ready gates on a successful pull + the httpd readiness probe passing. Generous budget
-        # for a scale-from-zero GPU node (provision + pull + start).
+        # Ready gates on a successful pull + the readiness probe (scale-from-zero GPU node budget).
         ready = run_kubectl(
             "wait", f"pod/{PROBE}", "-n", h.NAMESPACE, "--for=condition=Ready", "--timeout=600s", check=False
         )
@@ -67,7 +55,6 @@ def test_parallel_pull_serves_and_config_applies_on_gpu_node(
         # Explicit proof the image pulled: no waiting/ImagePullBackOff, container is Running.
         _assert_image_pulled(PROBE)
 
-        # Landed on a Karpenter g-tier GPU node (shared helper; returns the node name).
         node = h.assert_on_karpenter_gpu(PROBE)
 
         # Serve check: hit the pod's /ping from inside the container (air-gapped; no external LB).
