@@ -28,8 +28,8 @@ import pytest
 from pytest_jupyter_deploy.deployment import EndToEndDeployment
 from pytest_jupyter_deploy.kubernetes.kubectl import run_kubectl
 
-from tests import _cluster_helpers as ch
 from tests.e2e import _serving_helpers as h
+from tests.load import _bench_helpers as b
 
 PROBE = "gpu-parallel-pull-probe"
 # Repeat each measured pull to smooth registry/network jitter; report the median.
@@ -67,7 +67,7 @@ def test_gpu_parallel_pull_benchmark(
     try:
         # 1. One real `gpu` node via a probe pod.
         h.apply_resource("gpu-parallel-pull-probe.yaml", image=image, namespace=h.NAMESPACE)
-        assert ch.wait_pod_ready(h.NAMESPACE, PROBE, timeout_s=600), "probe pod never Ready (no GPU node?)"
+        assert b.wait_pod_ready(h.NAMESPACE, PROBE, timeout_s=600), "probe pod never Ready (no GPU node?)"
         node = h.assert_on_karpenter_gpu(PROBE)
 
         # 2. Correctness: the three keys are active under the transfer plugin (booted = ON).
@@ -78,12 +78,12 @@ def test_gpu_parallel_pull_benchmark(
 
         # 3. Warm the registry cache ONCE so neither measured pull pays the upstream cache-miss;
         #    the on/off delta then reflects node-side concurrency, not first-vs-second caching.
-        warm = ch.crictl_pull_seconds(node, image, bench_ref, remove_first=False)
+        warm = b.crictl_pull_seconds(node, image, bench_ref, remove_first=False)
         assert warm > 0, f"warmup pull of {bench_ref} failed — is the image reachable from the node?"
 
         # ON = booted default; OFF = concurrency forced to 1, rolled in place on the SAME node.
         on_times = _timed_pulls(node, image, bench_ref)
-        ch.write_containerd_dropin(node, image, BENCH_DROPIN, _transfer_block(1, 1, 0))
+        b.write_containerd_dropin(node, image, BENCH_DROPIN, _transfer_block(1, 1, 0))
         # GUARD: prove the OFF flip actually took effect in the ACTIVE config before trusting the
         # OFF timings. If the drop-in was corrupted or config.d isn't imported, OFF would silently
         # equal ON and the comparison would be meaningless — fail loudly instead.
@@ -94,7 +94,7 @@ def test_gpu_parallel_pull_benchmark(
             f"would falsely equal ON"
         )
         off_times = _timed_pulls(node, image, bench_ref)
-        ch.remove_containerd_dropin(node, image, BENCH_DROPIN)  # restore booted (ON) config
+        b.remove_containerd_dropin(node, image, BENCH_DROPIN)  # restore booted (ON) config
 
         _report(node, bench_ref, active, cri_transfer, warm, on_times, off_times)
 
@@ -106,7 +106,7 @@ def test_gpu_parallel_pull_benchmark(
         )
     finally:
         if node:
-            ch.remove_containerd_dropin(node, image, BENCH_DROPIN)
+            b.remove_containerd_dropin(node, image, BENCH_DROPIN)
         run_kubectl("delete", "pod", PROBE, "-n", h.NAMESPACE, "--ignore-not-found", check=False)
 
 
@@ -115,7 +115,7 @@ def _assert_transfer_keys_active(node: str, image: str) -> dict[str, int]:
     `containerd config dump` (effective merged config), and return the parsed key->value map.
     The correctness check the PR review asked for: a present key proves it landed active, not
     just that it was written to a file."""
-    dump = ch.containerd_config_dump(node, image)
+    dump = b.containerd_config_dump(node, image)
     assert TRANSFER_PLUGIN in dump, (
         f"{node}: '{TRANSFER_PLUGIN}' absent from `containerd config dump` — parallel-pull keys "
         f"are inert on this containerd build.\n--- dump tail ---\n{dump[-1500:]}"
@@ -131,13 +131,13 @@ def _assert_transfer_keys_active(node: str, image: str) -> dict[str, int]:
 def _cri_uses_transfer_service(node: str, image: str) -> bool:
     """Best-effort: does CRI route image pulls through the transfer service (the PR review's
     second concern)? containerd 2.x exposes this as use_local_image_pull/image_pull_with_sync."""
-    dump = ch.containerd_config_dump(node, image)
+    dump = b.containerd_config_dump(node, image)
     return "use_local_image_pull = true" in dump or "image_pull_with_sync = true" in dump
 
 
 def _timed_pulls(node: str, image: str, ref: str) -> list[float]:
     """REPEATS cold pulls (rmi + pull); drop any that failed (-1)."""
-    return [t for t in (ch.crictl_pull_seconds(node, image, ref) for _ in range(REPEATS)) if t > 0]
+    return [t for t in (b.crictl_pull_seconds(node, image, ref) for _ in range(REPEATS)) if t > 0]
 
 
 def _median(xs: list[float]) -> float:

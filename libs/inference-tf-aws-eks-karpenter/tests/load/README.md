@@ -27,9 +27,9 @@ NIC out of the measurement — the only variable is the config. On that node it:
 4. flips the node's transfer-plugin config to concurrency=1 in place, restarts containerd, and
    re-measures the **same** image **OFF**; then restores the node's config and reports the delta.
 
-Generic node/pull primitives live in the shared `tests/_cluster_helpers.py` (reusable by e2e
-and load tests alike); the parallel-pull specifics (the transfer-plugin keys and config block)
-live in the test itself.
+Node-level primitives (debug-exec, config dump, drop-in write, timed pull) live in
+`_bench_helpers.py`, colocated with the test; the parallel-pull specifics (the transfer-plugin
+keys and config block) live in the test itself.
 
 Run it:
 
