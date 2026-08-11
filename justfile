@@ -628,12 +628,18 @@ bench-gpu-parallel-pull project_dir="sandbox-e2e":
 
     PYTEST_ARGS="$LOAD_DIR -m benchmark --with-full-deployment --e2e-tests-dir=$LOAD_DIR --e2e-existing-project={{project_dir}} -s --verbose --log-cli-level=INFO"
     echo "Running GPU parallel-pull benchmark (project={{project_dir}})..."
-    {{container-tool}} compose --project-directory "$ROOT" $E2E_COMPOSE_FILES exec \
+    # Non-interactive + fail-fast: redirect stdin from /dev/null so `jd config` can't block on a
+    # prompt (it EOFs and errors instead of hanging), and cap the whole run with `timeout` so a
+    # stuck step fails loudly rather than wedging. Unset AWS_PROFILE so `jd cluster login` writes a
+    # kubeconfig whose `aws eks get-token` uses the injected static creds (the profile's
+    # credential_process, e.g. Isengard's `ada`, is absent in the image).
+    {{container-tool}} compose --project-directory "$ROOT" $E2E_COMPOSE_FILES exec -T \
         -e PYTHONUNBUFFERED=1 \
+        -e AWS_PROFILE= \
         -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}" \
         -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}" \
         -e AWS_SESSION_TOKEN="${AWS_SESSION_TOKEN:-}" \
-        e2e bash -c "cd /workspace && uv run pytest $PYTEST_ARGS"
+        e2e bash -c "unset AWS_PROFILE; cd /workspace && timeout 2400 uv run pytest $PYTEST_ARGS </dev/null"
 
 # Full workflow: start container (builds if needed) then run tests
 e2e-all project_dir="sandbox-e2e" test_filter="" options="" no_cache="false" template=default-template:
