@@ -76,3 +76,15 @@ blockDevice:
   deviceName: /dev/xvda
   volumeSizeGi: 200
   volumeType: gp3
+
+# -- GPU-node image-pull acceleration. AL2023's containerd 2.2 can download and
+#    unpack image layers in parallel but ships with it OFF; enabling it turns
+#    multi-minute multi-GB GPU/ML image pulls into seconds. Injected as a nodeadm
+#    NodeConfig containerd block in the gpu/gpu-p EC2NodeClass userData (Karpenter
+#    merges it with its cluster-join config). CPU nodes are intentionally excluded.
+#    All values injected from Terraform (platform_karpenter.tf).
+gpuParallelPull:
+  enabled: true
+  maxConcurrentDownloads: 20
+  # concurrent_layer_fetch_buffer, in bytes (16 MiB default).
+  layerFetchBufferBytes: 16777216

@@ -8,6 +8,27 @@ EC2NodeClasses (karpenter.k8s.aws/v1).
 Both discover subnets + SG via karpenter.sh/discovery, attach the shared node
 role, and use a large gp3 root. Karpenter generates the join NodeConfig userData.
 */ -}}
+{{- /*
+gpuParallelPull: a partial nodeadm NodeConfig enabling containerd 2.2 parallel
+image download + unpack. Emitted only on the GPU EC2NodeClasses (multi-GB ML
+images); Karpenter MERGES this with its generated cluster-join NodeConfig, so we
+supply ONLY the containerd block and none of the fields Karpenter manages. CPU
+nodes pull small images and are intentionally excluded.
+*/ -}}
+{{- define "karpenter.gpuParallelPullUserData" -}}
+{{- if .Values.gpuParallelPull.enabled }}
+  userData: |
+    apiVersion: node.eks.aws/v1alpha1
+    kind: NodeConfig
+    spec:
+      containerd:
+        config: |
+          [plugins.'io.containerd.transfer.v1.local']
+          max_concurrent_downloads = {{ .Values.gpuParallelPull.maxConcurrentDownloads | int64 }}
+          concurrent_layer_fetch_buffer = {{ .Values.gpuParallelPull.layerFetchBufferBytes | int64 }}
+          max_concurrent_unpacks = {{ .Values.gpuParallelPull.maxConcurrentDownloads | int64 }}
+{{- end }}
+{{- end -}}
 apiVersion: karpenter.k8s.aws/v1
 kind: EC2NodeClass
 metadata:
@@ -77,6 +98,7 @@ spec:
   capacityReservationSelectorTerms:
     - id: {{ .Values.gpuP.capacityReservationId | quote }}
 {{- end }}
+{{ include "karpenter.gpuParallelPullUserData" . }}
   tags:
     karpenter.sh/discovery: {{ .Values.discoveryTag | quote }}
 {{- end }}
@@ -116,5 +138,6 @@ spec:
     httpEndpoint: enabled
     httpTokens: required
     httpPutResponseHopLimit: 2
+{{ include "karpenter.gpuParallelPullUserData" . }}
   tags:
     karpenter.sh/discovery: {{ .Values.discoveryTag | quote }}

@@ -88,3 +88,10 @@ workload_namespace       = "inference"
 enable_efa                      = false
 efa_device_plugin_chart_version = "v0.5.30"
 efa_device_plugin_image_tag     = "v0.5.20" # chart v0.5.30 appVersion; vendored into ECR
+
+# --- GPU node image-pull acceleration (containerd 2.2 parallel pull/unpack) ---
+# GPU/ML images are multi-GB; AL2023 ships containerd 2.2 with parallel pull OFF.
+# Enabled only on the gpu/gpu-p NodeClasses (CPU nodes pull small images).
+gpu_parallel_image_pull                    = true
+gpu_parallel_image_pull_max_downloads      = 20
+gpu_parallel_image_pull_layer_buffer_bytes = 16777216 # 16 MiB
