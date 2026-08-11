@@ -19,10 +19,17 @@ NIC out of the measurement — the only variable is the config. On that node it:
    (`max_concurrent_downloads`, `concurrent_layer_fetch_buffer`, `max_concurrent_unpacks`)
    land under the **active** `io.containerd.transfer.v1.local` plugin table, and reports
    whether CRI image pulls honor the transfer service (the correctness check the PR review asked for);
-2. does a cold `crictl pull` of a large multi-layer image (timed, repeated) with parallel-pull
+2. **warms the registry cache once** (a throwaway pull) so neither measured pull pays the
+   upstream/ECR cache-miss — the on/off delta then reflects node-side concurrency, not a
+   first-vs-second caching artifact;
+3. does a cold `crictl pull` of a large multi-layer image (timed, repeated) with parallel-pull
    **ON** (the booted default);
-3. flips the node's transfer-plugin config to concurrency=1 in place, restarts containerd, and
+4. flips the node's transfer-plugin config to concurrency=1 in place, restarts containerd, and
    re-measures the **same** image **OFF**; then restores the node's config and reports the delta.
+
+Generic node/pull primitives live in the shared `tests/_cluster_helpers.py` (reusable by e2e
+and load tests alike); the parallel-pull specifics (the transfer-plugin keys and config block)
+live in the test itself.
 
 Run it:
 
