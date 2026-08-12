@@ -120,27 +120,32 @@ def _uses_soci_snapshotter(node: str, image: str) -> bool:
     Scopes the match to the CRI images plugin table so an unrelated soci mention can't false-pass.
     """
     dump = h.node_shell(node, image, "containerd config dump 2>/dev/null")
+    # (?:(?!\n\[)[\s\S])*? spans lines but stops at the next "[..." table header, so a
+    # snapshotter="soci" in a LATER plugin table can't satisfy the CRI-images match.
     return (
         re.search(
-            rf"\[plugins\.['\"]?{re.escape(CRI_IMAGES_PLUGIN)}['\"]?\].*?snapshotter\s*=\s*['\"]soci['\"]",
+            rf"\[plugins\.['\"]?{re.escape(CRI_IMAGES_PLUGIN)}['\"]?\](?:(?!\n\[)[\s\S])*?"
+            r"snapshotter\s*=\s*['\"]soci['\"]",
             dump,
-            re.DOTALL,
         )
         is not None
     )
 
 
 def _evict_image(node: str, image: str, ref: str) -> None:
-    """Remove `ref` and prune its layer blobs so the next pull is a true cold pull.
+    """Evict `ref` so the next pull is a true cold download + unpack.
 
-    `images rm` only drops the reference; `content prune references` evicts the unreferenced
-    blobs (without it a re-pull is a warm no-op).
+    Under the SOCI snapshotter the unpacked layers live as soci snapshots on disk; `images rm`
+    alone leaves them, so a re-pull is a warm no-op. Dropping the image, removing its soci
+    snapshots (leaf-first), and restarting the snapshotter releases them for a genuine cold pull.
     """
-    h.node_shell(
-        node,
-        image,
-        f"ctr -n k8s.io images rm {ref} >/dev/null 2>&1; ctr -n k8s.io content prune references >/dev/null 2>&1; true",
+    script = (
+        f"ctr -n k8s.io images rm {ref} >/dev/null 2>&1; "
+        'for k in $(ctr -n k8s.io snapshot --snapshotter soci ls 2>/dev/null | awk "NR>1{print \\$1}" | tac); do '
+        'ctr -n k8s.io snapshot --snapshotter soci rm "$k" >/dev/null 2>&1; done; '
+        "systemctl restart soci-snapshotter.service >/dev/null 2>&1; sleep 3; true"
     )
+    h.node_shell(node, image, script)
 
 
 def _bench_image_ref(e2e: EndToEndDeployment) -> str:
