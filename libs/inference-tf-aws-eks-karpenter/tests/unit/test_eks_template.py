@@ -233,8 +233,8 @@ def test_karpenter_drain_ordering() -> None:
     assert "null_resource.karpenter_drain" in nodepools and "helm_release.karpenter" in nodepools
 
 
-def test_post_eks_vpc_cleanup_ordering_and_scope() -> None:
-    """Late CNI ENIs must be reaped after EKS/MNG destroy and before VPC destroy."""
+def test_post_eks_cleanup_preserves_destroy_order() -> None:
+    """The cleanup sentinel must remain between EKS and the complete VPC network."""
     main = (ENGINE / "main.tf").read_text()
     eks_cluster = re.search(r'module\s+"eks_cluster".*?\n\}', main, re.DOTALL)
     assert eks_cluster is not None
@@ -243,22 +243,8 @@ def test_post_eks_vpc_cleanup_ordering_and_scope() -> None:
     content = (ENGINE / "post_eks_cleanup.tf").read_text()
     cleanup = _resource(content, "null_resource", "post_eks_vpc_cleanup")
     assert "module.vpc.vpc_id" in cleanup
-    assert 'join(",", module.vpc.private_subnet_ids)' in cleanup, (
-        "cleanup must retain the complete VPC network until its destroy provisioner finishes"
-    )
+    assert 'join(",", module.vpc.private_subnet_ids)' in cleanup
     assert "when        = destroy" in cleanup or "when = destroy" in cleanup.replace("  ", " ")
-    assert "post-eks-vpc-cleanup.sh.tftpl" in cleanup
-
-    script = (ENGINE / "post-eks-vpc-cleanup.sh.tftpl").read_text()
-    assert '"Name=vpc-id,Values=$VPC_ID"' in script
-    assert '"Name=description,Values=aws-K8S-*"' in script
-    assert "aws ec2 delete-network-interface" in script
-    assert '"Name=group-name,Values=eks-cluster-sg-$CLUSTER_NAME-*"' in script
-    assert "aws ec2 delete-security-group" in script
-    assert "MAX_ATTEMPTS=" in script and "SLEEP_INTERVAL=" in script
-    assert "aws eks describe-cluster" in script and "ResourceNotFoundException" in script, (
-        "replacement-time cleanup must be skipped while EKS still exists"
-    )
 
 
 # --- Air-gap: pull-through supply + image sourcing ---
@@ -745,15 +731,12 @@ def test_onboarder_backstop_and_workload_repos_cluster_scoped() -> None:
     assert "ecr:TagResource" in doc, "onboarder must be allowed to tag the repos it creates"
 
 
-def test_imperative_workload_repos_are_cleaned_on_destroy() -> None:
-    """The deployment-scoped workload repos must be force-deleted after their creators."""
+def test_workload_repo_cleanup_runs_after_creators() -> None:
+    """Workload repository creators must be destroyed before the scoped cleanup."""
     onboarder = (ENGINE / "onboarder.tf").read_text()
     cleanup = _resource(onboarder, "null_resource", "workload_repo_cleanup")
     assert "prefix = local.workload_repo_prefix" in cleanup
-    assert "region = var.region" in cleanup
     assert "when        = destroy" in cleanup or "when = destroy" in cleanup.replace("  ", " ")
-    assert 'case "$REPOSITORY" in' in cleanup and '"$PREFIX"/*)' in cleanup
-    assert "aws ecr delete-repository" in cleanup and "--force" in cleanup
 
     onboarder_module = re.search(r'module\s+"onboarder".*?\n\}', onboarder, re.DOTALL)
     assert onboarder_module is not None

@@ -7,6 +7,9 @@
 #   apply:   VPC network -> sentinel -> EKS -> managed node group
 #   destroy: managed node group -> EKS -> sentinel -> VPC network
 #
+# "post_eks" refers to its position after EKS destruction; cleanup deliberately
+# completes before Terraform starts deleting the VPC network.
+#
 # `network_barrier` is a load-bearing attribute reference. The subnet output has
 # module-level depends_on edges to routing and endpoints, so retaining it here
 # prevents Terraform from deleting VPC resources in parallel with this cleanup.

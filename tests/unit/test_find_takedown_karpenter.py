@@ -19,6 +19,16 @@ def _resources() -> ftk.DeploymentResources:
     )
 
 
+class TestVerificationEnabled(unittest.TestCase):
+    def test_defaults_on_for_scoped_teardown_and_off_for_cleanup_all(self) -> None:
+        self.assertTrue(ftk.verification_enabled("abc123", None))
+        self.assertFalse(ftk.verification_enabled(None, None))
+
+    def test_explicit_override_wins(self) -> None:
+        self.assertFalse(ftk.verification_enabled("abc123", False))
+        self.assertTrue(ftk.verification_enabled("abc123", True))
+
+
 class TestCaptureDeploymentResources(unittest.TestCase):
     @patch("find_takedown_karpenter.jd_output")
     def test_captures_destroyed_outputs_and_normalizes_registry(self, mock_output: Mock) -> None:
@@ -38,9 +48,8 @@ class TestCaptureDeploymentResources(unittest.TestCase):
 
 class TestSeedNonemptyWorkloadRepository(unittest.TestCase):
     @patch("find_takedown_karpenter.subprocess.run")
-    @patch("find_takedown_karpenter.boto3.client")
-    def test_pushes_tiny_image_under_deployment_prefix(self, mock_client: Mock, mock_run: Mock) -> None:
-        ecr = mock_client.return_value
+    def test_pushes_tiny_image_under_deployment_prefix(self, mock_run: Mock) -> None:
+        ecr = Mock()
         token = base64.b64encode(b"AWS:password").decode()
         ecr.get_authorization_token.return_value = {
             "authorizationData": [
@@ -53,7 +62,7 @@ class TestSeedNonemptyWorkloadRepository(unittest.TestCase):
         ecr.describe_images.return_value = {"imageDetails": [{"imageDigest": "sha256:abc"}]}
 
         repository = f"{_resources().workload_repo_prefix}/{ftk.CANARY_REPOSITORY_SUFFIX}"
-        result = ftk.seed_nonempty_workload_repository(_resources())
+        result = ftk.seed_nonempty_workload_repository(_resources(), ecr)
 
         self.assertEqual(result, repository)
         ecr.create_repository.assert_called_once_with(repositoryName=repository)
@@ -69,12 +78,11 @@ class TestSeedNonemptyWorkloadRepository(unittest.TestCase):
 
 
 class TestRemainingDeploymentResources(unittest.TestCase):
-    @patch("find_takedown_karpenter.boto3.client")
-    def test_reports_only_deployment_scoped_resources(self, mock_client: Mock) -> None:
+    def test_reports_only_deployment_scoped_resources(self) -> None:
         eks = Mock()
         ec2 = Mock()
         ecr = Mock()
-        mock_client.side_effect = [eks, ec2, ecr]
+        clients = ftk.AwsClients(eks=eks, ec2=ec2, ecr=ecr)
         ec2.describe_vpcs.return_value = {"Vpcs": [{"VpcId": "vpc-123"}]}
         ec2.describe_network_interfaces.return_value = {"NetworkInterfaces": [{"NetworkInterfaceId": "eni-123"}]}
         ec2.describe_security_groups.return_value = {"SecurityGroups": [{"GroupId": "sg-123"}]}
@@ -89,7 +97,7 @@ class TestRemainingDeploymentResources(unittest.TestCase):
             }
         ]
 
-        remaining = ftk.remaining_deployment_resources(_resources())
+        remaining = ftk.remaining_deployment_resources(_resources(), clients)
 
         self.assertEqual(
             remaining,
@@ -115,18 +123,21 @@ class TestVerifyTeardown(unittest.TestCase):
     def test_retries_until_all_resources_are_gone(self, mock_remaining: Mock, mock_sleep: Mock) -> None:
         mock_remaining.side_effect = [["VPC vpc-123"], []]
 
-        ftk.verify_teardown(_resources())
+        clients = Mock()
+        ftk.verify_teardown(_resources(), clients)
 
         self.assertEqual(mock_remaining.call_count, 2)
+        mock_remaining.assert_has_calls([call(_resources(), clients), call(_resources(), clients)])
         mock_sleep.assert_called_once_with(ftk.VERIFY_DELAY_SECONDS)
 
     @patch("find_takedown_karpenter.time.sleep")
     @patch("find_takedown_karpenter.remaining_deployment_resources")
     def test_fails_with_remaining_resource_details(self, mock_remaining: Mock, mock_sleep: Mock) -> None:
         mock_remaining.return_value = ["ECR repository inference-abc123/workload/canary"]
+        clients = Mock()
 
         with self.assertRaisesRegex(RuntimeError, "workload/canary"):
-            ftk.verify_teardown(_resources())
+            ftk.verify_teardown(_resources(), clients)
 
         self.assertEqual(mock_remaining.call_count, ftk.VERIFY_ATTEMPTS)
         self.assertEqual(mock_sleep.call_count, ftk.VERIFY_ATTEMPTS - 1)
@@ -137,6 +148,7 @@ class TestReap(unittest.TestCase):
     @patch("find_takedown_karpenter.verify_teardown")
     @patch("find_takedown_karpenter.takedown_project")
     @patch("find_takedown_karpenter.seed_nonempty_workload_repository")
+    @patch("find_takedown_karpenter.create_aws_clients")
     @patch("find_takedown_karpenter.capture_deployment_resources")
     @patch("find_takedown_karpenter.restore_secrets")
     @patch("find_takedown_karpenter.is_project_deployed", return_value=True)
@@ -147,6 +159,7 @@ class TestReap(unittest.TestCase):
         _mock_deployed: Mock,
         mock_secrets: Mock,
         mock_capture: Mock,
+        mock_clients: Mock,
         mock_seed: Mock,
         mock_takedown: Mock,
         mock_verify: Mock,
@@ -154,7 +167,9 @@ class TestReap(unittest.TestCase):
     ) -> None:
         project_dir = Path("sandbox-e2e")
         resources = _resources()
+        clients = ftk.AwsClients(eks=Mock(), ec2=Mock(), ecr=Mock())
         mock_capture.return_value = resources
+        mock_clients.return_value = clients
         manager = Mock()
         manager.attach_mock(mock_seed, "seed")
         manager.attach_mock(mock_takedown, "takedown")
@@ -165,12 +180,13 @@ class TestReap(unittest.TestCase):
 
         mock_restore.assert_called_once_with("tf-aws-eks-karpenter-abc123", project_dir)
         mock_secrets.assert_called_once_with(project_dir, required=False)
+        mock_clients.assert_called_once_with(resources.region)
         self.assertEqual(
             manager.mock_calls,
             [
-                call.seed(resources),
+                call.seed(resources, clients.ecr),
                 call.takedown(project_dir),
-                call.verify(resources),
+                call.verify(resources, clients),
                 call.delete("tf-aws-eks-karpenter-abc123"),
             ],
         )
@@ -179,6 +195,7 @@ class TestReap(unittest.TestCase):
     @patch("find_takedown_karpenter.verify_teardown")
     @patch("find_takedown_karpenter.takedown_project")
     @patch("find_takedown_karpenter.seed_nonempty_workload_repository")
+    @patch("find_takedown_karpenter.create_aws_clients")
     @patch("find_takedown_karpenter.capture_deployment_resources")
     @patch("find_takedown_karpenter.restore_secrets")
     @patch("find_takedown_karpenter.is_project_deployed", return_value=True)
@@ -189,6 +206,7 @@ class TestReap(unittest.TestCase):
         _mock_deployed: Mock,
         _mock_secrets: Mock,
         mock_capture: Mock,
+        mock_clients: Mock,
         mock_seed: Mock,
         mock_takedown: Mock,
         mock_verify: Mock,
@@ -199,6 +217,7 @@ class TestReap(unittest.TestCase):
         ftk.reap("tf-aws-eks-karpenter-abc123", project_dir)
 
         mock_capture.assert_not_called()
+        mock_clients.assert_not_called()
         mock_seed.assert_not_called()
         mock_takedown.assert_called_once_with(project_dir)
         mock_verify.assert_not_called()

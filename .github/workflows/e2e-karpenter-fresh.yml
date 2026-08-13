@@ -241,4 +241,4 @@ jobs:
         run: just ci-restore sandbox-ci
 
       - name: Take down and verify this run's deployment
-        run: just find-takedown-karpenter sandbox-e2e ${{ needs.deploy.outputs.deployment-id }} true
+        run: just find-takedown-karpenter sandbox-e2e ${{ needs.deploy.outputs.deployment-id }}

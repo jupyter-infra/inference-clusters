@@ -2,14 +2,17 @@
 """Take down and delete EKS Karpenter e2e project(s) from the S3 store.
 
 Usage:
-    scripts/find_takedown_karpenter.py <project-dir> [--deployment-id <id>] [--verify-teardown]
+    scripts/find_takedown_karpenter.py <project-dir> [--deployment-id <id>]
+        [--verify-teardown | --no-verify-teardown]
 
 With --deployment-id: reap only that one project (the standard e2e flow tears down its
-OWN deployment, so parallel runs never touch each other).
+OWN deployment, so parallel runs never touch each other). Teardown verification is
+enabled by default in this mode.
 
 With --verify-teardown: seed a non-empty repository under this deployment's workload
 prefix before destroy, then assert that the cluster, VPC, CNI ENIs, generated EKS
 security group, and every workload repository are gone. This requires --deployment-id.
+Use --no-verify-teardown to explicitly disable it for a scoped teardown.
 
 Without --deployment-id: reap ALL `tf-aws-eks-karpenter-*` projects — the nuclear option
 for the standalone cleanup workflow, to clear orphans from interrupted runs. NOT used by
@@ -32,6 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import boto3
+from botocore.client import BaseClient
 from botocore.exceptions import ClientError
 from ci_helpers import is_project_deployed, run_jd
 from ci_restore_karpenter import (
@@ -54,6 +58,26 @@ class DeploymentResources:
     vpc_id: str
     ecr_registry: str
     workload_repo_prefix: str
+
+
+@dataclass(frozen=True)
+class AwsClients:
+    eks: BaseClient
+    ec2: BaseClient
+    ecr: BaseClient
+
+
+def create_aws_clients(region: str) -> AwsClients:
+    return AwsClients(
+        eks=boto3.client("eks", region_name=region),
+        ec2=boto3.client("ec2", region_name=region),
+        ecr=boto3.client("ecr", region_name=region),
+    )
+
+
+def verification_enabled(deployment_id: str | None, override: bool | None) -> bool:
+    """Verify scoped teardown by default, while leaving cleanup-all unverified."""
+    return deployment_id is not None if override is None else override
 
 
 def jd_output(project_dir: Path, name: str) -> str:
@@ -79,11 +103,10 @@ def capture_deployment_resources(project_dir: Path) -> DeploymentResources:
     )
 
 
-def seed_nonempty_workload_repository(resources: DeploymentResources) -> str:
+def seed_nonempty_workload_repository(resources: DeploymentResources, ecr: BaseClient) -> str:
     """Push a tiny local image so teardown proves force deletion of a non-empty repo."""
     repository = f"{resources.workload_repo_prefix}/{CANARY_REPOSITORY_SUFFIX}"
     image_ref = f"{resources.ecr_registry}/{repository}:{CANARY_IMAGE_TAG}"
-    ecr = boto3.client("ecr", region_name=resources.region)
 
     try:
         ecr.create_repository(repositoryName=repository)
@@ -116,28 +139,25 @@ def seed_nonempty_workload_repository(resources: DeploymentResources) -> str:
     return repository
 
 
-def remaining_deployment_resources(resources: DeploymentResources) -> list[str]:
+def remaining_deployment_resources(resources: DeploymentResources, clients: AwsClients) -> list[str]:
     """Return deployment-scoped AWS resources that still exist."""
     remaining: list[str] = []
-    eks = boto3.client("eks", region_name=resources.region)
-    ec2 = boto3.client("ec2", region_name=resources.region)
-    ecr = boto3.client("ecr", region_name=resources.region)
 
     try:
-        eks.describe_cluster(name=resources.cluster_name)
+        clients.eks.describe_cluster(name=resources.cluster_name)
         remaining.append(f"EKS cluster {resources.cluster_name}")
     except ClientError as error:
         if error.response["Error"]["Code"] != "ResourceNotFoundException":
             raise
 
     try:
-        vpcs = ec2.describe_vpcs(VpcIds=[resources.vpc_id])["Vpcs"]
+        vpcs = clients.ec2.describe_vpcs(VpcIds=[resources.vpc_id])["Vpcs"]
         remaining.extend(f"VPC {vpc['VpcId']}" for vpc in vpcs)
     except ClientError as error:
         if error.response["Error"]["Code"] != "InvalidVpcID.NotFound":
             raise
 
-    enis = ec2.describe_network_interfaces(
+    enis = clients.ec2.describe_network_interfaces(
         Filters=[
             {"Name": "vpc-id", "Values": [resources.vpc_id]},
             {"Name": "description", "Values": ["aws-K8S-*"]},
@@ -145,7 +165,7 @@ def remaining_deployment_resources(resources: DeploymentResources) -> list[str]:
     )["NetworkInterfaces"]
     remaining.extend(f"CNI ENI {eni['NetworkInterfaceId']}" for eni in enis)
 
-    security_groups = ec2.describe_security_groups(
+    security_groups = clients.ec2.describe_security_groups(
         Filters=[
             {"Name": "vpc-id", "Values": [resources.vpc_id]},
             {"Name": "group-name", "Values": [f"eks-cluster-sg-{resources.cluster_name}-*"]},
@@ -154,7 +174,7 @@ def remaining_deployment_resources(resources: DeploymentResources) -> list[str]:
     remaining.extend(f"EKS security group {group['GroupId']}" for group in security_groups)
 
     repository_prefix = f"{resources.workload_repo_prefix}/"
-    paginator = ecr.get_paginator("describe_repositories")
+    paginator = clients.ecr.get_paginator("describe_repositories")
     for page in paginator.paginate():
         remaining.extend(
             f"ECR repository {repository['repositoryName']}"
@@ -165,10 +185,10 @@ def remaining_deployment_resources(resources: DeploymentResources) -> list[str]:
     return remaining
 
 
-def verify_teardown(resources: DeploymentResources) -> None:
+def verify_teardown(resources: DeploymentResources, clients: AwsClients) -> None:
     """Wait for AWS read-after-delete consistency, then fail on any scoped residue."""
     for attempt in range(1, VERIFY_ATTEMPTS + 1):
-        remaining = remaining_deployment_resources(resources)
+        remaining = remaining_deployment_resources(resources, clients)
         if not remaining:
             print("Verified teardown: cluster, VPC, CNI ENIs, EKS security group, and workload repos are gone.")
             return
@@ -211,12 +231,15 @@ def reap(project_id: str, project_dir: Path, *, verify: bool = False) -> None:
     restore_secrets(project_dir, required=False)
 
     resources = capture_deployment_resources(project_dir) if verify else None
+    clients = create_aws_clients(resources.region) if resources is not None else None
     if resources is not None:
-        seed_nonempty_workload_repository(resources)
+        assert clients is not None
+        seed_nonempty_workload_repository(resources, clients.ecr)
 
     takedown_project(project_dir)
     if resources is not None:
-        verify_teardown(resources)
+        assert clients is not None
+        verify_teardown(resources, clients)
     delete_project_from_store(project_id)
     print(f"  Project {project_id} taken down and deleted.")
 
@@ -231,12 +254,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--verify-teardown",
-        action="store_true",
-        help="Seed a non-empty workload repo and assert all deployment-scoped resources are deleted",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="verify scoped teardown (default: enabled with --deployment-id, disabled for cleanup-all)",
     )
     args = parser.parse_args()
 
-    if args.verify_teardown and not args.deployment_id:
+    verify_teardown_enabled = verification_enabled(args.deployment_id, args.verify_teardown)
+
+    if verify_teardown_enabled and not args.deployment_id:
         parser.error("--verify-teardown requires --deployment-id")
 
     project_dir = Path(args.project_dir)
@@ -251,7 +277,7 @@ def main() -> None:
     print(f"Reaping {scope}: {targets}")
 
     for project_id in targets:
-        reap(project_id, project_dir, verify=args.verify_teardown)
+        reap(project_id, project_dir, verify=verify_teardown_enabled)
 
     print("\nDone.")
 
