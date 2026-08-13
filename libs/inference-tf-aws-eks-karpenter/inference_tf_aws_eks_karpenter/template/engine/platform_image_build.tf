@@ -62,6 +62,8 @@ data "aws_iam_policy_document" "image_build_extra" {
 module "image_build" {
   source = "./modules/codebuild_job"
 
+  depends_on = [null_resource.workload_repo_cleanup]
+
   project_name = local.image_build_name
   # Push target: the same workload/* repos the onboarder vendors into.
   ecr_repository_arns = [local.workload_repo_arn]

@@ -34,6 +34,47 @@ locals {
   onboarder_name    = "${local.resource_name_prefix}-onboarder"
 }
 
+# The onboarder and image-build jobs create workload repositories imperatively, so
+# Terraform cannot discover them during destroy. Keep a destroy-only state sentinel
+# for the deployment-scoped prefix and force-delete every repository beneath it.
+#
+# Both CodeBuild modules depend on this resource. Terraform reverses that edge during
+# destroy, removing the jobs before this cleanup runs so they cannot create another
+# workload repository after the prefix has been reaped.
+resource "null_resource" "workload_repo_cleanup" {
+  triggers = {
+    prefix = local.workload_repo_prefix
+    region = var.region
+  }
+
+  provisioner "local-exec" {
+    when        = destroy
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-EOT
+      set -euo pipefail
+
+      PREFIX="${self.triggers.prefix}"
+      REGION="${self.triggers.region}"
+      REPOSITORIES=$(aws ecr describe-repositories \
+        --region "$REGION" \
+        --query 'repositories[].repositoryName' \
+        --output text)
+
+      for REPOSITORY in $REPOSITORIES; do
+        case "$REPOSITORY" in
+          "$PREFIX"/*)
+            echo "[workload-repo-cleanup] deleting $REPOSITORY"
+            aws ecr delete-repository \
+              --repository-name "$REPOSITORY" \
+              --region "$REGION" \
+              --force >/dev/null
+            ;;
+        esac
+      done
+    EOT
+  }
+}
+
 # Extra IAM for the onboard job: create+push workload/* ECR repos and WRITE the shared
 # bucket (chart tarball in rehost/in, overrides out to rehost/out, weights to models/).
 # READ access to weight-source buckets (any public/JumpStart source) comes from the
@@ -69,6 +110,8 @@ locals {
 
 module "onboarder" {
   source = "./modules/codebuild_job"
+
+  depends_on = [null_resource.workload_repo_cleanup]
 
   project_name = local.onboarder_name
   # LARGE (16 GiB / 8 vCPU) suffices: the S3 weight copy is server-side (UploadPartCopy —

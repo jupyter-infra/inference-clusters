@@ -233,6 +233,20 @@ def test_karpenter_drain_ordering() -> None:
     assert "null_resource.karpenter_drain" in nodepools and "helm_release.karpenter" in nodepools
 
 
+def test_post_eks_cleanup_preserves_destroy_order() -> None:
+    """The cleanup sentinel must remain between EKS and the complete VPC network."""
+    main = (ENGINE / "main.tf").read_text()
+    eks_cluster = re.search(r'module\s+"eks_cluster".*?\n\}', main, re.DOTALL)
+    assert eks_cluster is not None
+    assert "depends_on = [null_resource.post_eks_vpc_cleanup]" in eks_cluster.group(0)
+
+    content = (ENGINE / "post_eks_cleanup.tf").read_text()
+    cleanup = _resource(content, "null_resource", "post_eks_vpc_cleanup")
+    assert "module.vpc.vpc_id" in cleanup
+    assert 'join(",", module.vpc.private_subnet_ids)' in cleanup
+    assert "when        = destroy" in cleanup or "when = destroy" in cleanup.replace("  ", " ")
+
+
 # --- Air-gap: pull-through supply + image sourcing ---
 
 
@@ -715,3 +729,20 @@ def test_onboarder_backstop_and_workload_repos_cluster_scoped() -> None:
     )
     doc = _extract_block(content, "data", "aws_iam_policy_document", "onboarder_extra")
     assert "ecr:TagResource" in doc, "onboarder must be allowed to tag the repos it creates"
+
+
+def test_workload_repo_cleanup_runs_after_creators() -> None:
+    """Workload repository creators must be destroyed before the scoped cleanup."""
+    onboarder = (ENGINE / "onboarder.tf").read_text()
+    cleanup = _resource(onboarder, "null_resource", "workload_repo_cleanup")
+    assert "prefix = local.workload_repo_prefix" in cleanup
+    assert "when        = destroy" in cleanup or "when = destroy" in cleanup.replace("  ", " ")
+
+    onboarder_module = re.search(r'module\s+"onboarder".*?\n\}', onboarder, re.DOTALL)
+    assert onboarder_module is not None
+    assert "depends_on = [null_resource.workload_repo_cleanup]" in onboarder_module.group(0)
+
+    image_build = (ENGINE / "platform_image_build.tf").read_text()
+    image_build_module = re.search(r'module\s+"image_build".*?\n\}', image_build, re.DOTALL)
+    assert image_build_module is not None
+    assert "depends_on = [null_resource.workload_repo_cleanup]" in image_build_module.group(0)

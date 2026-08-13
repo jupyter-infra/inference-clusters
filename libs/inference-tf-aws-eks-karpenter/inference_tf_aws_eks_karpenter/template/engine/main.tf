@@ -123,6 +123,12 @@ module "eks_cluster" {
   # Not exposed as a variable for the POC.
   public_access_cidrs = ["0.0.0.0/0"]
   combined_tags       = local.combined_tags
+
+  # Apply: VPC -> post-EKS cleanup sentinel -> EKS.
+  # Destroy: EKS (and its managed node group) -> sentinel -> VPC.
+  # This lets the sentinel reap CNI ENIs that detach only after the managed node
+  # group is gone, before Terraform starts deleting subnets and the VPC.
+  depends_on = [null_resource.post_eks_vpc_cleanup]
 }
 
 # Tag the cluster security group for Karpenter discovery (EC2NodeClass

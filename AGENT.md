@@ -75,8 +75,10 @@ Unit tests live in `libs/<pkg>/tests/unit`.
 1. Define a `unittest.TestCase` per class/function/major method under test.
 2. Prefer `@patch()` / inline `with patch` over `pytest.fixtures`.
 3. Always annotate patched args as `: Mock` for mypy.
-4. All templates MUST have consistency unit tests;
-  refer to the `eks-karpenter` tests for precedent.
+4. Templates MUST have focused consistency tests for stable contracts and load-bearing
+  dependency-graph invariants that `terraform validate` cannot catch. Do not mirror an
+  implementation by asserting incidental file names, command text, or every internal
+  step; cover observable behavior with E2E tests instead.
 
 ### Testing templates
 
