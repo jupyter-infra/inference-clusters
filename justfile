@@ -136,13 +136,20 @@ ci-restore-karpenter project_dir=e2e-dir deployment_id="":
     uv run python {{justfile_directory()}}/scripts/ci_restore_karpenter.py $ARGS
 
 # Tear down + delete karpenter e2e project(s). With a deployment_id, reap only that one
-# (the standard e2e flow's own-deployment teardown). Without, reap ALL — the nuclear
-# option for the standalone cleanup workflow (orphans from interrupted runs).
-find-takedown-karpenter project_dir=e2e-dir deployment_id="":
+# (the standard e2e flow's own-deployment teardown). Scoped teardown verifies by
+# default; verify=false opts out. Without a deployment_id, reap ALL without verification
+# — the nuclear option for the standalone cleanup workflow.
+find-takedown-karpenter project_dir=e2e-dir deployment_id="" verify="auto":
     #!/usr/bin/env bash
     set -euo pipefail
     ARGS="{{project_dir}}"
     if [ -n "{{deployment_id}}" ]; then ARGS="$ARGS --deployment-id {{deployment_id}}"; fi
+    case "{{verify}}" in
+        auto) ;;
+        true) ARGS="$ARGS --verify-teardown" ;;
+        false) ARGS="$ARGS --no-verify-teardown" ;;
+        *) echo "verify must be auto, true, or false" >&2; exit 2 ;;
+    esac
     uv run python {{justfile_directory()}}/scripts/find_takedown_karpenter.py $ARGS
 
 # ECR repo URL for the e2e image (slot 1 of the CI-infra deploy)
