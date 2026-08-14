@@ -68,21 +68,21 @@ def test_parallel_pull_flag_toggles_gpu_userdata_only(
     e2e_deployment.ensure_deployed()
     marker = "FastImagePull"
 
+    # Only the off-flip needs a guaranteed revert; the on-flip below doubles as the base-state restore.
     try:
-        # OFF: no GPU class carries the gate.
         e2e_deployment.update_override_value("gpu_parallel_image_pull", False)
         e2e_deployment.ensure_deployed_with([], timeout_seconds=900)
         for cls in ("gpu", "gpu-p"):
             assert marker not in _ec2nodeclass_userdata(cls), f"{cls} userData should NOT have the gate when off"
+    except BaseException:
+        e2e_deployment.update_override_value("gpu_parallel_image_pull", True)
+        e2e_deployment.ensure_deployed_with([], timeout_seconds=900)
+        raise
 
-        # ON: gpu + gpu-p carry the FastImagePull gate; cpu never does.
-        e2e_deployment.update_override_value("gpu_parallel_image_pull", True)
-        e2e_deployment.ensure_deployed_with([], timeout_seconds=900)
-        for cls in ("gpu", "gpu-p"):
-            ud = _ec2nodeclass_userdata(cls)
-            assert marker in ud, f"{cls} userData missing the FastImagePull gate when on\n--- userData ---\n{ud}"
-        assert marker not in _ec2nodeclass_userdata("cpu"), "cpu userData must NEVER carry the FastImagePull gate"
-    finally:
-        # Restore the default (on) regardless of outcome.
-        e2e_deployment.update_override_value("gpu_parallel_image_pull", True)
-        e2e_deployment.ensure_deployed_with([], timeout_seconds=900)
+    # ON: gpu + gpu-p carry the gate; cpu never does.
+    e2e_deployment.update_override_value("gpu_parallel_image_pull", True)
+    e2e_deployment.ensure_deployed_with([], timeout_seconds=900)
+    for cls in ("gpu", "gpu-p"):
+        ud = _ec2nodeclass_userdata(cls)
+        assert marker in ud, f"{cls} userData missing the FastImagePull gate when on\n--- userData ---\n{ud}"
+    assert marker not in _ec2nodeclass_userdata("cpu"), "cpu userData must NEVER carry the FastImagePull gate"

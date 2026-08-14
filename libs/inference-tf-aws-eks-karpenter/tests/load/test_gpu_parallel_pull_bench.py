@@ -7,10 +7,10 @@ Validates and measures the feature the way a workload experiences it — a real 
 
 The snapshotter is a bootstrap-time node setting, so timing is an absolute measurement (no
 same-node on/off flip). The config assertion is hard; timing is informational. Excluded from
-the e2e gate by the `benchmark` marker; run via `just bench-gpu-parallel-pull`.
+the e2e gate by the `benchmark` marker; run via `just bench-gpu-parallel-pull`. Node-level and
+parsing utilities live in `_loadtest_helpers.py` to keep this file orchestration-only.
 """
 
-import re
 import subprocess
 import time
 from pathlib import Path
@@ -21,14 +21,12 @@ from pytest_jupyter_deploy.deployment import EndToEndDeployment
 from pytest_jupyter_deploy.kubernetes.kubectl import run_kubectl
 
 from tests.e2e import _serving_helpers as h
+from tests.load import _loadtest_helpers as lt
 
 PROBE = "gpu-parallel-pull-probe"
-PULLER = "gpu-parallel-pull-timer"
+PULLER = "gpu-parallel-pull-timer"  # matches metadata.name in resources/gpu-parallel-pull-timer.yaml
 # Onboard chart (images: only) whose large image gets vendored to this cluster's ECR.
 BENCH_CHART = Path(__file__).resolve().parent / "charts" / "bench-image"
-# containerd's CRI images plugin table (config schema v3). nodeadm's FastImagePull gate sets
-# its snapshotter to "soci" (parallel pull/unpack) — the on-node effect this benchmark verifies.
-CRI_IMAGES_PLUGIN = "io.containerd.cri.v1.images"
 
 
 @pytest.mark.benchmark
@@ -51,12 +49,12 @@ def test_gpu_parallel_pull_benchmark(
         node = h.assert_on_karpenter_gpu(PROBE)
 
         # 2. Correctness: the booted node uses the SOCI snapshotter (the feature's effect).
-        assert _uses_soci_snapshotter(node, image), (
+        assert lt.uses_soci_snapshotter(node, image), (
             f"{node}: CRI snapshotter is not 'soci' — the FastImagePull gate did not take effect"
         )
 
         # 3. Time a real kubelet pod pull on the SOCI-enabled node.
-        _evict_image(node, image, bench_ref)
+        lt.evict_image(node, image, bench_ref)
         pull_s = _time_pod_pull(node, bench_ref)
         assert pull_s > 0, f"pod pull of {bench_ref} did not report a Pulled event in time"
 
@@ -70,19 +68,10 @@ def _time_pod_pull(node: str, ref: str) -> float:
     """Schedule a pod that pulls `ref` on `node`; return kubelet's reported pull seconds (-1 on timeout).
 
     Parses the kubelet `Pulled` event ("Successfully pulled image ... in <dur>"), which times the
-    real CRI pull. do-not-disrupt keeps Karpenter from consolidating the node mid-measurement.
+    real CRI pull. The pod manifest (do-not-disrupt, nodeName pin) lives in resources/.
     """
     run_kubectl("delete", "pod", PULLER, "-n", h.NAMESPACE, "--ignore-not-found", check=False)
-    manifest = (
-        "apiVersion: v1\nkind: Pod\n"
-        f"metadata: {{name: {PULLER}, namespace: {h.NAMESPACE}, "
-        'annotations: {karpenter.sh/do-not-disrupt: "true"}}\n'
-        "spec:\n  terminationGracePeriodSeconds: 2\n"
-        f"  nodeName: {node}\n"
-        "  tolerations: [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]\n"
-        f'  containers: [{{name: c, image: {ref}, command: ["sh","-c","exit 0"]}}]\n'
-    )
-    subprocess.run(["kubectl", "apply", "-f", "-"], input=manifest, text=True, check=True, capture_output=True)
+    lt.apply_load_resource("gpu-parallel-pull-timer.yaml", name=PULLER, namespace=h.NAMESPACE, node=node, ref=ref)
     for _ in range(180):  # up to ~15 min for a multi-GB cold pull
         msg = run_kubectl(
             "get",
@@ -95,57 +84,11 @@ def _time_pod_pull(node: str, ref: str) -> float:
             "jsonpath={.items[0].message}",
             check=False,
         ).stdout
-        secs = _parse_pull_duration(msg)
+        secs = lt.parse_pull_duration(msg)
         if secs is not None:
             return secs
         time.sleep(5)
     return -1.0
-
-
-def _parse_pull_duration(msg: str) -> float | None:
-    """Parse kubelet's 'Successfully pulled image ... in 3m31.7s' into seconds; None if absent."""
-    m = re.search(r"in ((?:\d+m)?[\d.]+m?s)", msg)
-    if not m:
-        return None
-    text = m.group(1)
-    mins = re.search(r"(\d+)m(?!s)", text)
-    secs = re.search(r"([\d.]+)s", text)
-    total = (int(mins.group(1)) * 60 if mins else 0) + (float(secs.group(1)) if secs else 0.0)
-    return total or None
-
-
-def _uses_soci_snapshotter(node: str, image: str) -> bool:
-    """Whether the node's effective containerd config sets the CRI images snapshotter to "soci".
-
-    Scopes the match to the CRI images plugin table so an unrelated soci mention can't false-pass.
-    """
-    dump = h.node_shell(node, image, "containerd config dump 2>/dev/null")
-    # (?:(?!\n\[)[\s\S])*? spans lines but stops at the next "[..." table header, so a
-    # snapshotter="soci" in a LATER plugin table can't satisfy the CRI-images match.
-    return (
-        re.search(
-            rf"\[plugins\.['\"]?{re.escape(CRI_IMAGES_PLUGIN)}['\"]?\](?:(?!\n\[)[\s\S])*?"
-            r"snapshotter\s*=\s*['\"]soci['\"]",
-            dump,
-        )
-        is not None
-    )
-
-
-def _evict_image(node: str, image: str, ref: str) -> None:
-    """Evict `ref` so the next pull is a true cold download + unpack.
-
-    Under the SOCI snapshotter the unpacked layers live as soci snapshots on disk; `images rm`
-    alone leaves them, so a re-pull is a warm no-op. Dropping the image, removing its soci
-    snapshots (leaf-first), and restarting the snapshotter releases them for a genuine cold pull.
-    """
-    script = (
-        f"ctr -n k8s.io images rm {ref} >/dev/null 2>&1; "
-        'for k in $(ctr -n k8s.io snapshot --snapshotter soci ls 2>/dev/null | awk "NR>1{print \\$1}" | tac); do '
-        'ctr -n k8s.io snapshot --snapshotter soci rm "$k" >/dev/null 2>&1; done; '
-        "systemctl restart soci-snapshotter.service >/dev/null 2>&1; sleep 3; true"
-    )
-    h.node_shell(node, image, script)
 
 
 def _bench_image_ref(e2e: EndToEndDeployment) -> str:
