@@ -72,7 +72,7 @@ def test_kro_graph_onboards_and_serves_without_helm(e2e_deployment: EndToEndDepl
         )
 
         # 3. kubectl-create the CR -> KRO expands children -> Karpenter GPU -> vLLM serves.
-        h.apply_resource(CR_RESOURCE)
+        h.apply_resource(CR_RESOURCE, namespace=h.NAMESPACE)
         rollout = run_kubectl(
             "rollout", "status", f"deployment/{CR_NAME}", "-n", h.NAMESPACE, "--timeout=1200s", check=False
         )

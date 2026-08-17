@@ -28,7 +28,9 @@ GRAPHS_DIR = Path(__file__).resolve().parent / "graphs"  # Path-B KRO graph fixt
 SOURCES_DIR = Path(__file__).resolve().parent / "sources"  # image-build source-dir fixtures (Dockerfile + context)
 # Static YAML manifests the tests kubectl-apply (never inline heredocs in a test body).
 RESOURCES_DIR = Path(__file__).resolve().parent / "resources"
-NAMESPACE = "default"
+# The engine-owned workload namespace (workload_namespace preset), where the model-store
+# PVC lives. A pod mounts a PVC only from its own namespace.
+NAMESPACE = "inference"
 # The vLLM image the vllm-qwen chart declares, as the onboarder names it UNDER the
 # cluster-scoped workload prefix (<cluster>/workload/...). Used as a substring assertion on
 # the emitted overrides (the full ref is <ecr>/<cluster>/workload/vllm/vllm-openai@<digest>).

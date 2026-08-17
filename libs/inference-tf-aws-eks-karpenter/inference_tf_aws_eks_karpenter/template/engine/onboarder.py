@@ -433,9 +433,12 @@ class Runner:
         if source.startswith("s3://"):
             self._copy_s3_prefix(source, dst_uri)
         elif source.startswith("hf://"):
-            repo_id = source[len("hf://") :].partition("@")[0]
+            repo_id, separator, revision = source[len("hf://") :].partition("@")
             stage = f"/tmp/hf/{name}"
-            snapshot_download(repo_id=repo_id, local_dir=stage)
+            if separator:
+                snapshot_download(repo_id=repo_id, revision=revision, local_dir=stage)
+            else:
+                snapshot_download(repo_id=repo_id, local_dir=stage)
             subprocess.run(["s5cmd", "cp", f"{stage}/", f"{dst_uri}/"], check=True)
         else:
             raise SystemExit(f"[onboard] ERROR: unsupported weight source {source!r} (want hf:// or s3://)")

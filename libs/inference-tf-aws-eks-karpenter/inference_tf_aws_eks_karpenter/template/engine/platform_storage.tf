@@ -235,6 +235,7 @@ resource "helm_release" "storage" {
     { name = "s3.bucketName", value = module.model_store.bucket_name },
     { name = "s3.region", value = data.aws_region.current.id },
     { name = "s3.modelsPrefix", value = local.model_store_models_prefix },
+    { name = "s3.claimNamespace", value = kubernetes_namespace_v1.workload.metadata[0].name },
     # Chart content hash so editing a chart file triggers a re-apply (see main.tf).
     { name = "chartContentHash", value = local.chart_hashes["storage"] },
   ]

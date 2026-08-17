@@ -107,11 +107,12 @@ def test_keda_scales_vllm_from_zero_via_router(e2e_deployment: EndToEndDeploymen
             "router.yaml",
             router_image=h.python_image(e2e_deployment),
             backend_url=f"http://{RELEASE}.{h.NAMESPACE}.svc:8000",
+            namespace=h.NAMESPACE,
         )
         run_kubectl("rollout", "status", "deployment/keda-router", "-n", h.NAMESPACE, "--timeout=300s", check=True)
 
         # 3. Apply the ScaledObject (minReplicaCount=0, scales on router_inflight_requests).
-        h.apply_resource("vllm-scaledobject.yaml", target=RELEASE)
+        h.apply_resource("vllm-scaledobject.yaml", target=RELEASE, namespace=h.NAMESPACE)
 
         # 3a. At rest (no requests): KEDA holds vLLM at 0, no serving pod. Wait on the
         #     ScaledObject reconciling + a stable-at-zero window rather than a blind sleep.
