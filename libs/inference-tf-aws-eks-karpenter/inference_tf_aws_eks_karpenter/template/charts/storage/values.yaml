@@ -20,3 +20,19 @@ s3:
   # -- Namespace + name of the read-only PVC charts mount.
   claimNamespace: default
   claimName: model-store
+
+# -- FSx for Lustre static PV/PVC — shared RWX file system (opt-in).
+fsx:
+  # -- Render the FSx PV/PVC. Toggled from Terraform when var.enable_fsx is true.
+  enabled: false
+  # -- FSx file system ID (fs-xxxxxxxx…).
+  fileSystemId: ""
+  # -- FSx DNS name (fs-xxxx.fsx.<region>.amazonaws.com).
+  dnsName: ""
+  # -- Lustre mount name — the 8-char opaque string FSx generates per FS.
+  mountName: ""
+  # -- Capacity for the PV/PVC.
+  capacity: 4800Gi
+  # -- Namespace + name of the FSx PVC charts mount.
+  claimNamespace: default
+  claimName: model-store-fsx

@@ -221,27 +221,42 @@ resource "aws_iam_role_policy" "s3_csi" {
 
 # --- StorageClasses + S3 mount PV/PVC (charts/storage) ---
 #
-# First-party local chart: the EBS gp3 default class (RWO, dynamic) + the s3-models
-# static PV/PVC (Mountpoint supports STATIC provisioning only). One helm_release so
+# First-party local chart: the EBS gp3 default class (RWO, dynamic), the s3-models
+# static PV/PVC (Mountpoint supports STATIC provisioning only), and — when
+# var.enable_fsx is true — the FSx for Lustre static PV/PVC. One helm_release so
 # the objects install/uninstall atomically and teardown-order cleanly before the CSI
-# drivers (via depends_on cluster_addons). FSx RWX class is added here later.
+# drivers (via depends_on cluster_addons + helm_release.fsx_csi_driver).
 resource "helm_release" "storage" {
   name      = "storage"
   chart     = "${path.module}/../charts/storage"
   namespace = "kube-system"
 
-  set = [
-    { name = "ebs.default", value = "true" },
-    { name = "s3.bucketName", value = module.model_store.bucket_name },
-    { name = "s3.region", value = data.aws_region.current.id },
-    { name = "s3.modelsPrefix", value = local.model_store_models_prefix },
-    # Chart content hash so editing a chart file triggers a re-apply (see main.tf).
-    { name = "chartContentHash", value = local.chart_hashes["storage"] },
-  ]
+  set = concat(
+    [
+      { name = "ebs.default", value = "true" },
+      { name = "s3.bucketName", value = module.model_store.bucket_name },
+      { name = "s3.region", value = data.aws_region.current.id },
+      { name = "s3.modelsPrefix", value = local.model_store_models_prefix },
+      # Chart content hash so editing a chart file triggers a re-apply (see main.tf).
+      { name = "chartContentHash", value = local.chart_hashes["storage"] },
+      { name = "fsx.enabled", value = tostring(var.enable_fsx) },
+    ],
+    # FSx values populated only when the file system exists; otherwise fsx.enabled=false
+    # short-circuits the chart's fsx-mount.yaml template.
+    var.enable_fsx ? [
+      { name = "fsx.fileSystemId", value = aws_fsx_lustre_file_system.shared[0].id },
+      { name = "fsx.dnsName", value = aws_fsx_lustre_file_system.shared[0].dns_name },
+      { name = "fsx.mountName", value = aws_fsx_lustre_file_system.shared[0].mount_name },
+      { name = "fsx.capacity", value = "${var.fsx_storage_capacity_gib}Gi" },
+      { name = "fsx.claimNamespace", value = kubernetes_namespace_v1.workload.metadata[0].name },
+    ] : [],
+  )
 
   depends_on = [
     null_resource.cluster_addons,
     aws_eks_addon.s3_csi_driver,
     module.node_group,
+    helm_release.fsx_csi_driver,
+    aws_fsx_data_repository_association.models,
   ]
 }

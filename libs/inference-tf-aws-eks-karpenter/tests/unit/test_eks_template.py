@@ -702,6 +702,160 @@ def test_node_launch_template_carries_mirror_userdata() -> None:
     assert "node.eks.aws" in tftpl, "userData must be a nodeadm NodeConfig MIME part"
 
 
+# --- FSx for Lustre (opt-in) ---
+
+
+def test_fsx_resources_are_gated_on_enable_fsx() -> None:
+    """Every resource / module / data source declared in platform_fsx.tf MUST be gated by
+    `count = var.enable_fsx ? 1 : 0`.
+
+    FSx is opt-in — a PERSISTENT_2 SSD file system has a non-trivial hourly cost floor,
+    and it is single-AZ. A resource that leaks past the gate provisions Lustre on every
+    deployment (or fails plan on a fresh account with no SLR).
+    """
+    content = (ENGINE / "platform_fsx.tf").read_text()
+    # Every resource | module | data block in the file must be gated.
+    declared = re.findall(
+        r'^(?:resource|module|data)\s+"[^"]+"\s+"([^"]+)"\s*\{',
+        content,
+        re.MULTILINE,
+    )
+    assert declared, "no resources / modules / data sources declared in platform_fsx.tf"
+    for name in declared:
+        # Extract the matching block by its declaration line.
+        pattern = rf'(?:resource|module|data)\s+"[^"]+"\s+"{re.escape(name)}"\s*\{{'
+        block_start = re.search(pattern, content)
+        assert block_start is not None
+        depth, idx = 1, block_start.end()
+        while idx < len(content) and depth > 0:
+            depth += {"{": 1, "}": -1}.get(content[idx], 0)
+            idx += 1
+        block = content[block_start.end() : idx - 1]
+        assert re.search(r"count\s*=\s*var\.enable_fsx\s*\?\s*1\s*:\s*0", block), (
+            f"platform_fsx.tf resource/module/data '{name}' missing count = var.enable_fsx gate"
+        )
+
+
+def test_fsx_uses_persistent2_ssd_lz4_with_dra() -> None:
+    """The FSx file system MUST be PERSISTENT_2 SSD (DRA-capable) with LZ4 compression, and
+    MUST have a Data Repository Association pointed at the model-store bucket's models/ prefix
+    with auto-export off (S3 is source of truth; workloads never write to /models)."""
+    content = (ENGINE / "platform_fsx.tf").read_text()
+    fs = _resource(content, "aws_fsx_lustre_file_system", "shared")
+    assert 'deployment_type             = "PERSISTENT_2"' in fs or 'deployment_type = "PERSISTENT_2"' in fs.replace(
+        "  ", " "
+    ), "FSx must be PERSISTENT_2 (DRA-capable)"
+    assert 'storage_type                = "SSD"' in fs or 'storage_type = "SSD"' in fs.replace("  ", " ")
+    assert 'data_compression_type       = "LZ4"' in fs or 'data_compression_type = "LZ4"' in fs.replace("  ", " ")
+    # The FSx service-linked role MUST NOT be TF-managed: it is an account-global singleton;
+    # a `resource "aws_iam_service_linked_role" "fsx"` would collide across two coexisting
+    # FSx-enabled deployments in one account (second apply fails "role has been taken").
+    # FSx auto-creates it on the first CreateFileSystem call — a documented one-time race.
+    assert 'resource "aws_iam_service_linked_role"' not in content, (
+        "platform_fsx.tf must NOT declare aws_iam_service_linked_role — it's an account-global "
+        "singleton that breaks two-deployments-in-one-account coexistence"
+    )
+
+    dra = _resource(content, "aws_fsx_data_repository_association", "models")
+    assert "module.model_store.bucket_name" in dra, "DRA must point at the model_store bucket"
+    assert "local.model_store_models_prefix" in dra, "DRA must point at the shared models/ prefix"
+    assert "batch_import_meta_data_on_create = true" in dra, "DRA must index pre-existing objects on create"
+    # Auto-export MUST be empty (workloads never write to /models via Lustre); auto-import ON.
+    assert re.search(r"auto_export_policy\s*\{\s*events\s*=\s*\[\s*\]", dra), (
+        "auto_export_policy events must be empty (S3 is source of truth)"
+    )
+    assert re.search(r'auto_import_policy\s*\{\s*events\s*=\s*\[.*"NEW".*\]', dra, re.DOTALL), (
+        "auto_import_policy must include NEW events"
+    )
+
+
+def test_fsx_sg_rules_are_sg_referenced_not_cidr() -> None:
+    """FSx SG rules MUST source by SG reference (not CIDR).
+
+    CIDR-based rules — including 0.0.0.0/0 — do not satisfy EFA requirements even if they
+    allow all traffic on all ports (per the FSx docs), so an EFA-enabled NodePool that
+    tries to mount FSx would silently fail. Also verify the four Lustre-protocol ports
+    are opened both ways (988 + 1018-1023).
+    """
+    content = (ENGINE / "platform_fsx.tf").read_text()
+    # No CIDR sources anywhere in an SG rule body.
+    for kind in ("aws_vpc_security_group_ingress_rule", "aws_vpc_security_group_egress_rule"):
+        for name in re.findall(rf'resource\s+"{kind}"\s+"([^"]+)"', content):
+            block = _resource(content, kind, name)
+            assert "cidr_ipv4" not in block and "cidr_ipv6" not in block, (
+                f"{kind}.{name} must source by SG reference, not CIDR (EFA composition)"
+            )
+            assert "referenced_security_group_id" in block, f"{kind}.{name} missing referenced_security_group_id"
+
+    # 988 + 1018-1023 must appear on both ingress and egress sides.
+    for port_kw in ("from_port                    = 988", "from_port                    = 1018"):
+        assert content.count(port_kw) >= 2, f"expected multiple SG rules with {port_kw!r} (ingress + egress)"
+
+
+def test_fsx_csi_role_uses_pod_identity_and_least_privilege() -> None:
+    """The FSx CSI controller SA MUST authenticate via Pod Identity to a dedicated role
+    scoped to Describe-only actions (static provisioning). Explicitly NOT AmazonFSxFullAccess
+    — that managed policy grants Delete/Update, giving a chart-supply-chain compromise
+    enough authority to nuke the file system AND hang jd down on state drift.
+    """
+    content = (ENGINE / "platform_fsx.tf").read_text()
+    role = re.search(r'module\s+"fsx_csi_role"\s*\{(.*?)\n\}', content, re.DOTALL)
+    assert role is not None
+    role_body = role.group(1)
+    assert "pod_identity_trust" in role_body, "FSx CSI role must use the shared pod_identity_trust doc"
+    # Explicit deny-list: no managed AmazonFSxFullAccess (too broad — includes Delete/Update).
+    assert "AmazonFSxFullAccess" not in content, (
+        "FSx CSI role must NOT attach AmazonFSxFullAccess (grants Delete/Update on every FS in "
+        "the account — least-privilege violation the rest of this repo doesn't tolerate)"
+    )
+
+    # A dedicated Describe-only inline policy MUST exist on the role.
+    doc = _extract_block(content, "data", "aws_iam_policy_document", "fsx_csi")
+    assert "fsx:DescribeFileSystems" in doc, "fsx_csi inline policy must grant DescribeFileSystems"
+    # Anything mutating on FSx is explicitly forbidden by this shape.
+    for forbidden in ("fsx:DeleteFileSystem", "fsx:UpdateFileSystem", "fsx:CreateFileSystem"):
+        assert forbidden not in doc, (
+            f"fsx_csi inline policy MUST NOT grant {forbidden} — static provisioning does not need it"
+        )
+    inline = _resource(content, "aws_iam_role_policy", "fsx_csi")
+    assert "module.fsx_csi_role[0].role_name" in inline, "inline policy must attach to the FSx CSI role"
+
+    assoc = _resource(content, "aws_eks_pod_identity_association", "fsx_csi")
+    assert 'service_account = "fsx-csi-controller-sa"' in assoc, (
+        "Pod Identity association must bind the fsx-csi-controller-sa SA"
+    )
+    assert "module.fsx_csi_role[0].role_arn" in assoc, "Pod Identity association must use the gated FSx CSI role"
+
+
+def test_storage_chart_wires_fsx_values_conditionally() -> None:
+    """The storage helm_release MUST pass fsx.enabled to the chart (always) and inject the
+    file system id / dns name / mount name / capacity only when var.enable_fsx is true.
+
+    The chart's fsx-mount.yaml short-circuits on `fsx.enabled: false`, so unconditional
+    injection is safe but wasted API traffic; a var.enable_fsx-gated concat() keeps plan
+    diffs quiet when FSx is off.
+    """
+    block = _resource((ENGINE / "platform_storage.tf").read_text(), "helm_release", "storage")
+    assert '"fsx.enabled"' in block, "storage chart must always receive fsx.enabled"
+    assert "var.enable_fsx ?" in block, "FSx set values must be conditional on var.enable_fsx"
+    for key in ("fsx.fileSystemId", "fsx.dnsName", "fsx.mountName"):
+        assert f'"{key}"' in block, f"storage chart missing FSx wiring for {key}"
+    assert "aws_fsx_lustre_file_system.shared[0]" in block, "FSx values must reference the gated FSx FS resource"
+
+
+def test_fsx_pv_template_is_gated_by_values_flag() -> None:
+    """The FSx PV/PVC chart template MUST be wrapped in `if .Values.fsx.enabled` so a chart
+    render with fsx.enabled=false produces zero PV/PVC objects (the FSx-off default)."""
+    tmpl = (CHARTS / "storage" / "templates" / "fsx-mount.yaml").read_text()
+    assert "if .Values.fsx.enabled" in tmpl, "fsx-mount.yaml must be gated on .Values.fsx.enabled"
+    # The FSx CSI driver requires <fs-id>::<mount-name> for volumeHandle (not the fs-id alone).
+    assert "{{ .Values.fsx.fileSystemId }}::{{ .Values.fsx.mountName }}" in tmpl, (
+        "volumeHandle MUST be <fs-id>::<mount-name> for the FSx CSI driver (not just the FS id)"
+    )
+    # flock is the load-bearing mount option for SafeTensors / mmap consumers.
+    assert "flock" in tmpl, "FSx PV must mount with flock (POSIX file locks)"
+
+
 def test_onboarder_backstop_and_workload_repos_cluster_scoped() -> None:
     """The chart-onboarder MUST digest-vendor + backstop (no non-air-gapped ref escapes), and its
     imperative workload/* ECR repos MUST embed resource_name_prefix (two-deployments-coexist)."""

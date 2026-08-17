@@ -1,0 +1,60 @@
+# A minimal consumer pod that mounts the FSx-backed /models PVC RWX (the PVC's own
+# accessModes) and exercises a POSIX read/write round-trip to prove the Lustre data
+# plane end-to-end. Pinned to the FSx AZ (single-AZ file system) via
+# topology.kubernetes.io/zone nodeAffinity. Runs on the default Karpenter CPU NodePool —
+# the FSx path is provider-agnostic; a GPU node is unnecessary to prove the mount works.
+#
+# Substitutions:
+#   ${image}         — busybox via pull-through
+#   ${namespace}     — workload namespace (from Terraform output)
+#   ${claim_name}    — FSx PVC name (from the storage chart: fsx.claimName)
+#   ${zone}          — FSx AZ (from Terraform output fsx_availability_zone)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fsx-consumer-e2e
+  namespace: ${namespace}
+  labels:
+    app: fsx-consumer-e2e
+spec:
+  restartPolicy: Never
+  # Pods must land in the FSx AZ or every mount pays inter-AZ traffic + latency.
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: topology.kubernetes.io/zone
+                operator: In
+                values: ["${zone}"]
+  containers:
+    - name: shell
+      image: ${image}
+      command: ["sh", "-c"]
+      # Prove the mount is present + writeable at the Lustre layer (the PVC is RWX; the
+      # mountPath is left rw so the assertion can also touch a scratch file). The DRA's
+      # auto_export_policy is empty, so writes never propagate back to S3 — safe for E2E.
+      # No shell command substitutions and no bare dollar-vars in the script below:
+      # every dollar sign would be interpreted as a placeholder by python string.Template
+      # in apply_resource(), and the render errors before this pod even applies.
+      args:
+        - |
+          set -eu
+          echo "[fsx-consumer] uname -a:"; uname -a
+          echo "[fsx-consumer] /models mount info:"
+          mount | grep -E "on /models" || (echo "no /models mount" >&2; exit 1)
+          echo "[fsx-consumer] /models listing (may be empty on a fresh DRA):"
+          ls -la /models
+          echo "[fsx-consumer] writing scratch file..."
+          echo "hello-fsx-write-check" > /models/.e2e-write-check
+          echo "[fsx-consumer] reading it back:"
+          cat /models/.e2e-write-check
+          rm -f /models/.e2e-write-check
+          echo "[fsx-consumer] OK"
+      volumeMounts:
+        - name: models
+          mountPath: /models
+  volumes:
+    - name: models
+      persistentVolumeClaim:
+        claimName: ${claim_name}

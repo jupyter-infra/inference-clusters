@@ -516,3 +516,65 @@ variable "efa_device_plugin_image_tag" {
   EOT
   type        = string
 }
+
+# === FSx for Lustre (opt-in) ===
+
+variable "enable_fsx" {
+  description = <<-EOT
+    Install the FSx for Lustre RWX shared file system (weight cache + shared scratch).
+
+    Opt-in: adds a PERSISTENT_2 SSD file system in the first private subnet, a Data
+    Repository Association to the model store bucket's models/ prefix, the aws-fsx-csi-driver
+    Helm release, and a static PV/PVC exposing /models over Lustre. Off by default because
+    an FSx file system has a non-trivial hourly cost floor and is single-AZ.
+
+    Recommended: false
+  EOT
+  type        = bool
+}
+
+variable "fsx_storage_capacity_gib" {
+  description = <<-EOT
+    FSx for Lustre storage capacity in GiB.
+
+    PERSISTENT_2 SSD requires multiples of 1200. Storage size and per-unit throughput
+    together set aggregate throughput (capacity_gib × per_unit_throughput / 1024).
+
+    Recommended: 4800
+  EOT
+  type        = number
+}
+
+variable "fsx_per_unit_storage_throughput" {
+  description = <<-EOT
+    FSx for Lustre per-unit throughput in MB/s per TiB (PERSISTENT_2 SSD).
+
+    Allowed values: 125, 250, 500, 1000. Bump for P4d/P5-heavy fleets or heavy
+    training checkpoint traffic.
+
+    Recommended: 250
+  EOT
+  type        = number
+}
+
+variable "fsx_kms_key_arn" {
+  description = <<-EOT
+    Customer-managed KMS key ARN for FSx encryption at rest.
+
+    Empty string = the AWS-managed aws/fsx key.
+
+    Recommended: ""
+  EOT
+  type        = string
+}
+
+variable "fsx_csi_driver_chart_version" {
+  description = <<-EOT
+    Helm chart version for the aws-fsx-csi-driver.
+
+    Sourced from https://kubernetes-sigs.github.io/aws-fsx-csi-driver.
+
+    Recommended: 1.17.0
+  EOT
+  type        = string
+}
