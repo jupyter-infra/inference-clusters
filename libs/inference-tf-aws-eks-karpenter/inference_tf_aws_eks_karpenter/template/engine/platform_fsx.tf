@@ -1,26 +1,13 @@
-# === FSx for Lustre — high-throughput RWX file system (opt-in) ===
+# === FSx for Lustre — opt-in RWX weight cache ===
 #
-# The third weight-serving path alongside S3-direct and S3-mount (Mountpoint-for-S3).
-# Backs workloads that need RWX POSIX with sub-ms metadata and hundreds of GB/s of
-# aggregate throughput (LoRA/checkpoint scratch, shared dataset caches, KV-cache
-# offload). Off by default: a PERSISTENT_2 SSD file system has a non-trivial hourly
-# cost floor even when idle, and it is single-AZ (FSx for Lustre is one subnet).
-#
-# When enabled, this file provisions:
-#   - a dedicated SG allowing Lustre TCP 988 + 1018-1023 in both directions between
-#     the FSx ENIs and the EKS cluster SG (and self-referencing for inter-server RPC),
-#   - a PERSISTENT_2 SSD file system with LZ4 compression, KMS at-rest encryption
-#     (customer-managed if var.fsx_kms_key_arn is set, else the aws/fsx AWS-managed
-#     key), WARN_ERROR event logs to CloudWatch,
-#   - a Data Repository Association at /models linking to s3://<model_store>/models/
-#     (auto-import all events, auto-export disabled — S3 is the source of truth),
-#   - the aws-fsx-csi-driver Helm release (controller Deployment on the tainted
-#     system NG, node plugin DaemonSet tolerates all taints), Pod Identity–bound
-#     to a dedicated role with a least-privilege Describe-only inline policy.
-#
-# AZ: FSx lands in module.vpc.private_subnet_ids[0]. FSx-consumer pods must add a
-# topology.kubernetes.io/zone nodeAffinity to output.fsx_availability_zone or accept
-# cross-AZ mount latency + inter-AZ transfer. See research/fsx/terraform-eks-integration.md.
+# Third weight-serving path alongside S3-direct and Mountpoint-for-S3, for RWX POSIX
+# workloads (LoRA/checkpoint scratch, KV-cache offload, shared dataset caches). Off
+# by default (non-trivial hourly cost, single-AZ). Provisions PERSISTENT_2 SSD + LZ4
+# + DRA to s3://<model_store>/models/ (auto-import on, auto-export off — S3 stays
+# source of truth), a dedicated SG for Lustre ports (988, 1018-1023), and the
+# aws-fsx-csi-driver Helm release with a least-privilege Describe-only IAM role.
+# FSx lands in private_subnet_ids[0]; consumer pods should pin to
+# output.fsx_availability_zone via topology.kubernetes.io/zone nodeAffinity.
 
 locals {
   fsx_namespace  = "kube-system"

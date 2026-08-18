@@ -561,7 +561,13 @@ variable "fsx_kms_key_arn" {
   description = <<-EOT
     Customer-managed KMS key ARN for FSx encryption at rest.
 
-    Empty string = the AWS-managed aws/fsx key.
+    FSx enforces encryption at rest always; this variable only selects which key.
+    Empty string (the default) means the AWS-managed aws/fsx key — zero cost, no
+    customer control over rotation or cross-account grants. Setting a KMS ARN
+    switches to that customer-managed key (rotation control, key-policy audit,
+    cross-service auth via `kms:ViaService = fsx.<region>.amazonaws.com`).
+    The template does not auto-create a CMK; if you want one, pre-create it and
+    pass its ARN here.
 
     Recommended: ""
   EOT

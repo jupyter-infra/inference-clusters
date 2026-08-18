@@ -1,29 +1,13 @@
 """Mutating live E2E — FSx for Lustre opt-in path.
 
-Flips `enable_fsx = true` on the base cluster, reapplies, and asserts the full FSx path
-is wired end-to-end:
-
-  1. Terraform outputs surface fsx_file_system_id / fsx_dns_name / fsx_mount_name /
-     fsx_availability_zone / fsx_data_repository_path once enabled.
-  2. The FSx for Lustre file system reaches lifecycle AVAILABLE (fsx describe).
-  3. The Data Repository Association reaches lifecycle AVAILABLE and points at the
-     model-store bucket's models/ prefix.
-  4. The aws-fsx-csi-driver Helm release is installed. Controller pod runs on the
-     tainted system MNG; the node-plugin DaemonSet is ready on all nodes.
-  5. The static PV + PVC bind (RWX, mountOptions=flock, volumeHandle=<fs>::<mount>).
-  6. A consumer pod on a Karpenter node in the FSx AZ mounts /models RWX, ls's it,
-     writes + reads a scratch file, and exits 0.
-
-MUTATE-ONCE-AND-REVERT: a module-scoped fixture enables FSx exactly once for the module
-and reverts to `enable_fsx=false` at teardown (finally), so any later test/session reuse
-returns to the base state. FSx is expensive (a PERSISTENT_2 SSD FS has an hourly cost
-floor), so this test is single: multiple assertions share one enable+revert cycle.
-
-Marked `mutating`. `full_deployment` is implied — a live cluster is required.
+Module-scoped fixture flips `enable_fsx=true`, reapplies, yields; reverts on teardown so
+subsequent test sessions see the base state. All four tests share one enable+revert
+cycle (FSx has an hourly cost floor). Assertions cover the full chain: TF outputs
+populated, FS + DRA reach AVAILABLE, CSI driver placed correctly, static PV/PVC bind,
+and a consumer pod pinned to the FSx AZ does an RWX round-trip against /models.
 """
 
 import json
-import subprocess
 import time
 from collections.abc import Generator
 
@@ -63,30 +47,14 @@ def fsx_enabled(e2e_deployment: EndToEndDeployment) -> Generator[EndToEndDeploym
         e2e_deployment.ensure_deployed_with([], timeout_seconds=2400)
 
 
-def _aws_json(*args: str) -> object:
-    """Run an AWS CLI command with --output json and return the parsed body."""
-    result = subprocess.run(
-        ["aws", *args, "--output", "json"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return json.loads(result.stdout)
-
-
 def _await_fsx_available(region: str, fs_id: str, timeout_s: int = 1800) -> None:
-    """Poll fsx describe-file-systems until Lifecycle=AVAILABLE (or fail after timeout).
-
-    Terraform's create waits for AVAILABLE too, so this is defense-in-depth for a mid-run
-    describe race (e.g. a maintenance-window blip). Fails with the last-seen lifecycle so
-    a stuck FAILED / MISCONFIGURED file system surfaces loudly."""
+    """Poll DescribeFileSystems until Lifecycle=AVAILABLE; defence-in-depth for a
+    mid-run describe race, fail loud on terminal Lifecycles."""
     deadline = time.time() + timeout_s
     lifecycle = "UNKNOWN"
     while time.time() < deadline:
-        body = _aws_json("fsx", "describe-file-systems", "--file-system-ids", fs_id, "--region", region)
-        assert isinstance(body, dict)
-        systems = body.get("FileSystems", [])
-        assert systems, f"fsx describe-file-systems returned no file systems for {fs_id}"
+        systems = h.fsx_client(region).describe_file_systems(FileSystemIds=[fs_id])["FileSystems"]
+        assert systems, f"DescribeFileSystems returned no results for {fs_id}"
         lifecycle = systems[0].get("Lifecycle", "UNKNOWN")
         if lifecycle == "AVAILABLE":
             return
@@ -96,23 +64,16 @@ def _await_fsx_available(region: str, fs_id: str, timeout_s: int = 1800) -> None
     raise AssertionError(f"FSx file system {fs_id} never reached AVAILABLE (last Lifecycle={lifecycle})")
 
 
-def _await_dra_available(region: str, fs_id: str, timeout_s: int = 900) -> dict[str, object]:
-    """Poll describe-data-repository-associations until Lifecycle=AVAILABLE; return the assoc."""
+def _await_dra_available(region: str, fs_id: str, timeout_s: int = 900) -> dict:
+    """Poll DescribeDataRepositoryAssociations until Lifecycle=AVAILABLE; return the assoc."""
     deadline = time.time() + timeout_s
     lifecycle = "UNKNOWN"
     while time.time() < deadline:
-        body = _aws_json(
-            "fsx",
-            "describe-data-repository-associations",
-            "--filters",
-            f"Name=file-system-id,Values={fs_id}",
-            "--region",
-            region,
-        )
-        assert isinstance(body, dict)
-        associations = body.get("Associations", [])
+        associations = h.fsx_client(region).describe_data_repository_associations(
+            Filters=[{"Name": "file-system-id", "Values": [fs_id]}],
+        )["Associations"]
         if associations:
-            association: dict[str, object] = associations[0]
+            association = dict(associations[0])
             lifecycle = str(association.get("Lifecycle", "UNKNOWN"))
             if lifecycle == "AVAILABLE":
                 return association

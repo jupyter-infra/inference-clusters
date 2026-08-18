@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -714,6 +714,7 @@ dependencies = [
     { name = "huggingface-hub" },
     { name = "kubernetes" },
     { name = "mypy-boto3-eks" },
+    { name = "mypy-boto3-fsx" },
     { name = "mypy-boto3-s3" },
     { name = "mypy-boto3-sts" },
 ]
@@ -738,6 +739,7 @@ requires-dist = [
     { name = "huggingface-hub" },
     { name = "kubernetes", specifier = ">=31.0.0" },
     { name = "mypy-boto3-eks" },
+    { name = "mypy-boto3-fsx" },
     { name = "mypy-boto3-s3" },
     { name = "mypy-boto3-sts" },
 ]
@@ -1155,6 +1157,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f9/17/aa4160243744e7d1deb876a6819909ba2eeb6990cfc2b96054e48ab05e69/mypy_boto3_elbv2-1.43.54.tar.gz", hash = "sha256:71ad9d0f28795aa24a90b08b70ebf8321ca6970cbe5a5124beb85c3a561c5e2d", size = 37725, upload-time = "2026-07-22T20:08:47.994Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9e/26/acd719cababb39104c714ad74830c6f4fffe86e887f9c677e74f732ff741/mypy_boto3_elbv2-1.43.54-py3-none-any.whl", hash = "sha256:ac742c45582cbfd2d26b0cc83ae7a2713c2acd6ba7101755eed5cfe8639a7308", size = 44483, upload-time = "2026-07-22T20:08:45.025Z" },
+]
+
+[[package]]
+name = "mypy-boto3-fsx"
+version = "1.43.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/41/72/72af654a4a85f083ae27727c5a3ba87b01829cda8b09a6e726c32cbaf4ec/mypy_boto3_fsx-1.43.0.tar.gz", hash = "sha256:e2ba01dc011d378cd719c794364ae66ab9934e198f6d2f5296dbc71ba905fbce", size = 42197, upload-time = "2026-04-29T23:00:53.667Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6b/b2/473fb0d4efb209a717e92b1af9bca9fcc72df2cf1da2430ecc1c41f501c0/mypy_boto3_fsx-1.43.0-py3-none-any.whl", hash = "sha256:64d945028f05b68c31cdb6de1221444639af9fbf819cda420bcd45d462857823", size = 48139, upload-time = "2026-04-29T23:00:52.092Z" },
 ]
 
 [[package]]
