@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Runs after the EKS cluster and Terraform-managed node group are destroyed but
+# before any VPC networking is removed. EKS/VPC-CNI resources are eventually
+# consistent, so both phases retry for a bounded period and fail with the
+# remaining resource details rather than leaving Terraform to fail opaquely.
+
+CLUSTER_NAME="${cluster_name}"
+REGION="${region}"
+VPC_ID="${vpc_id}"
+MAX_ATTEMPTS=40
+SLEEP_INTERVAL=15
+
+# A script change replaces the null_resource and invokes its destroy provisioner
+# during a normal apply. Never clean network resources while the cluster is live;
+# the real destroy path reaches this sentinel only after DeleteCluster completes.
+if cluster_probe="$(aws eks describe-cluster \
+  --name "$CLUSTER_NAME" \
+  --region "$REGION" \
+  --query "cluster.status" \
+  --output text 2>&1)"; then
+  echo "[post-eks-cleanup] cluster $CLUSTER_NAME is still $cluster_probe; skipping replacement-time cleanup."
+  exit 0
+elif [[ "$cluster_probe" != *"ResourceNotFoundException"* ]]; then
+  echo "[post-eks-cleanup] ERROR: could not determine whether cluster $CLUSTER_NAME still exists:" >&2
+  echo "$cluster_probe" >&2
+  exit 1
+fi
+
+list_cni_enis() {
+  aws ec2 describe-network-interfaces \
+    --region "$REGION" \
+    --filters "Name=vpc-id,Values=$VPC_ID" "Name=description,Values=aws-K8S-*" \
+    --query "NetworkInterfaces[].[NetworkInterfaceId,Status]" \
+    --output text
+}
+
+reap_cni_enis() {
+  local attempt eni_rows eni status
+
+  for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
+    eni_rows="$(list_cni_enis)"
+    if [ -z "$eni_rows" ]; then
+      echo "[post-eks-cleanup] no CNI ENIs remain in $VPC_ID."
+      return 0
+    fi
+
+    while read -r eni status; do
+      [ -z "$eni" ] && continue
+      if [ "$status" = "available" ]; then
+        echo "[post-eks-cleanup] deleting released CNI ENI $eni"
+        aws ec2 delete-network-interface \
+          --region "$REGION" \
+          --network-interface-id "$eni" 2>&1 || true
+      else
+        echo "[post-eks-cleanup] CNI ENI $eni is still $status; waiting for AWS to release it."
+      fi
+    done <<< "$eni_rows"
+
+    if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+      sleep "$SLEEP_INTERVAL"
+    fi
+  done
+
+  eni_rows="$(list_cni_enis)"
+  if [ -z "$eni_rows" ]; then
+    echo "[post-eks-cleanup] no CNI ENIs remain in $VPC_ID."
+    return 0
+  fi
+
+  echo "[post-eks-cleanup] ERROR: CNI ENIs remain after $((MAX_ATTEMPTS * SLEEP_INTERVAL))s:" >&2
+  echo "$eni_rows" >&2
+  return 1
+}
+
+list_cluster_security_groups() {
+  aws ec2 describe-security-groups \
+    --region "$REGION" \
+    --filters "Name=vpc-id,Values=$VPC_ID" \
+              "Name=group-name,Values=eks-cluster-sg-$CLUSTER_NAME-*" \
+    --query "SecurityGroups[].GroupId" \
+    --output text | tr '\t' ' '
+}
+
+reap_cluster_security_groups() {
+  local attempt group_ids group_id
+
+  for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
+    group_ids="$(list_cluster_security_groups)"
+    if [ -z "$group_ids" ]; then
+      echo "[post-eks-cleanup] no generated EKS security group remains for $CLUSTER_NAME."
+      return 0
+    fi
+
+    for group_id in $group_ids; do
+      echo "[post-eks-cleanup] deleting generated EKS security group $group_id"
+      aws ec2 delete-security-group \
+        --region "$REGION" \
+        --group-id "$group_id" 2>&1 || true
+    done
+
+    if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+      sleep "$SLEEP_INTERVAL"
+    fi
+  done
+
+  group_ids="$(list_cluster_security_groups)"
+  if [ -z "$group_ids" ]; then
+    echo "[post-eks-cleanup] no generated EKS security group remains for $CLUSTER_NAME."
+    return 0
+  fi
+
+  echo "[post-eks-cleanup] ERROR: generated EKS security group remains after $((MAX_ATTEMPTS * SLEEP_INTERVAL))s:" >&2
+  echo "$group_ids" >&2
+  return 1
+}
+
+echo "[post-eks-cleanup] reaping post-EKS resources for $CLUSTER_NAME in $VPC_ID..."
+reap_cni_enis
+reap_cluster_security_groups
+echo "[post-eks-cleanup] done."
