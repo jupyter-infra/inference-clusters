@@ -581,9 +581,11 @@ If your loader doesn't already saturate the NIC, run multiple loader processes:
 from concurrent.futures import ThreadPoolExecutor
 from safetensors import safe_open
 
+
 def load_shard(path):
     with safe_open(path, framework="pt", device=0) as f:
         return {k: f.get_tensor(k) for k in f.keys()}
+
 
 with ThreadPoolExecutor(max_workers=8) as ex:
     shards = list(ex.map(load_shard, shard_paths))
