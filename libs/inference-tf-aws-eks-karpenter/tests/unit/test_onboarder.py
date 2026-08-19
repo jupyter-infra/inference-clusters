@@ -319,6 +319,32 @@ class TestPathBBuilds(unittest.TestCase):
                 co.onboard(graph, tmp, _onboarder_with_build(FakeRunner()))
             self.assertIn("missing keys", str(cm.exception))
 
+    def test_builds_context_escaping_artifact_dir_fails(self) -> None:
+        # A `context` that resolves outside the artifact dir (absolute or ../..) would tar +
+        # upload + bake arbitrary files into the image — must be rejected before any build.
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            sidecar = (
+                "images: []\nbuilds:\n"
+                f"  - path: {self.IMAGE_PATH}\n"
+                "    context: ../../../../etc\n"
+                "    name: aiperf\n"
+                '    tag: "0.9.0"\n'
+            )
+            graph = self._stage_with_build(tmp, sidecar, make_ctx=False)
+            with self.assertRaises(SystemExit) as cm:
+                co.onboard(graph, tmp, _onboarder_with_build(FakeRunner()))
+            self.assertIn("escapes the artifact dir", str(cm.exception))
+
+    def test_builds_non_mapping_entry_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            sidecar = "images: []\nbuilds:\n  - just-a-string\n"
+            graph = self._stage_with_build(tmp, sidecar, make_ctx=False)
+            with self.assertRaises(SystemExit) as cm:
+                co.onboard(graph, tmp, _onboarder_with_build(FakeRunner()))
+            self.assertIn("must be a mapping", str(cm.exception))
+
 
 class FakeS3Client:
     """In-memory S3 double: serves source objects by byte-range, records dest writes, and

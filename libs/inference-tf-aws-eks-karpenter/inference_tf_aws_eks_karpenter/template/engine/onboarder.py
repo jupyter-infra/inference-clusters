@@ -66,6 +66,7 @@ import json
 import os
 import re
 import subprocess
+import tarfile
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -253,6 +254,16 @@ class Runner:
         self.dry_run = dry_run
         self.skopeo_extra = [a for a in skopeo_extra.split() if a]
         self._s3_client: Any = None
+        self._codebuild_client: Any = None
+
+    @property
+    def codebuild_client(self) -> Any:
+        """boto3 CodeBuild client, built lazily (like s3_client) so dry-run and the
+        pure-core unit tests never construct one (and never need AWS creds)."""
+        if self._codebuild_client is None:
+            region = os.environ["AWS_DEFAULT_REGION"]
+            self._codebuild_client = boto3.client("codebuild", region_name=region)
+        return self._codebuild_client
 
     @property
     def s3_client(self) -> Any:
@@ -366,72 +377,45 @@ class Runner:
         never emits a dangling ref."""
         if self.dry_run:
             return
-        region = os.environ["AWS_DEFAULT_REGION"]
         if not (context_dir / "Dockerfile").is_file():
             raise SystemExit(f"[onboard] ERROR: build context {context_dir} has no Dockerfile at its root")
-        # Docker build context must have the Dockerfile at the tarball root (the image-build
-        # buildspec asserts /tmp/src/Dockerfile) — tar the context dir CONTENTS, not the dir.
-        tgz = Path(tempfile.mkdtemp(prefix="onboard-build-")) / "source.tgz"
-        subprocess.run(
-            ["tar", "-czf", str(tgz), "-C", str(context_dir), "."], check=True, capture_output=True, text=True
-        )
-        source_ref = f"{input_uri.rstrip('/')}/{name}/source.tgz"
-        subprocess.run(
-            ["aws", "s3", "cp", str(tgz), source_ref, "--region", region],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        start = subprocess.run(
-            [
-                "aws",
-                "codebuild",
-                "start-build",
-                "--project-name",
-                project,
-                "--region",
-                region,
-                "--environment-variables-override",
-                f"name=SOURCE_REF,value={source_ref},type=PLAINTEXT",
-                f"name=IMAGE_NAME,value={name},type=PLAINTEXT",
-                f"name=IMAGE_TAG,value={tag},type=PLAINTEXT",
-                "--query",
-                "build.id",
-                "--output",
-                "text",
+        # Tar the context CONTENTS (Dockerfile at the tarball root — the image-build buildspec
+        # asserts /tmp/src/Dockerfile) and upload it, then trigger + poll the build. All AWS
+        # calls go through boto3 (no aws-CLI shell-out): env values pass as structured fields,
+        # so a name/tag with shell/CLI-special chars can't be misparsed or injected. The temp
+        # tarball is removed with its dir (TemporaryDirectory) whether or not the upload fails.
+        src_bucket, src_prefix = split_s3_uri(input_uri)
+        key = f"{src_prefix + '/' if src_prefix else ''}{name}/source.tgz"
+        with tempfile.TemporaryDirectory(prefix="onboard-build-") as td:
+            tgz = Path(td) / "source.tgz"
+            with tarfile.open(tgz, "w:gz") as tf:
+                tf.add(context_dir, arcname=".")
+            self.s3_client.upload_file(str(tgz), src_bucket, key)
+        source_ref = f"s3://{src_bucket}/{key}"
+
+        build_id = self.codebuild_client.start_build(
+            projectName=project,
+            environmentVariablesOverride=[
+                {"name": "SOURCE_REF", "value": source_ref, "type": "PLAINTEXT"},
+                {"name": "IMAGE_NAME", "value": name, "type": "PLAINTEXT"},
+                {"name": "IMAGE_TAG", "value": tag, "type": "PLAINTEXT"},
             ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        build_id = start.stdout.strip()
+        )["build"]["id"]
         log(f"  build: started {project} build {build_id} for {name}:{tag}")
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            r = subprocess.run(
-                [
-                    "aws",
-                    "codebuild",
-                    "batch-get-builds",
-                    "--ids",
-                    build_id,
-                    "--region",
-                    region,
-                    "--query",
-                    "builds[0].buildStatus",
-                    "--output",
-                    "text",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            status = r.stdout.strip()
+            time.sleep(15)
+            try:
+                builds = self.codebuild_client.batch_get_builds(ids=[build_id])["builds"]
+            except ClientError as e:
+                # Tolerate a transient throttle/5xx mid-poll — keep polling until the deadline.
+                log(f"  build: transient error polling {build_id} ({e}); retrying")
+                continue
+            status = builds[0]["buildStatus"] if builds else "IN_PROGRESS"
             if status == "SUCCEEDED":
                 return
             if status in ("FAILED", "FAULT", "STOPPED", "TIMED_OUT"):
                 raise SystemExit(f"[onboard] ERROR: image-build {build_id} ended: {status}")
-            time.sleep(15)
         raise SystemExit(f"[onboard] ERROR: image-build {build_id} did not finish within {timeout}s")
 
     def ingest_weights(self, source: str, dst_uri: str, name: str) -> None:
@@ -787,11 +771,22 @@ class Onboarder:
 
         if builds:
             log(f"building images with no upstream to {self.ecr}/{self.prefix}/*")
+            graph_root = graph_dir.resolve()
             for b in builds:
+                if not isinstance(b, dict):
+                    raise SystemExit(f"[onboard] ERROR: builds entry must be a mapping, got {b!r}")
                 missing = [k for k in ("path", "context", "name", "tag") if k not in b]
                 if missing:
                     raise SystemExit(f"[onboard] ERROR: builds entry {b!r} missing keys {missing}")
-                dst_repo, digest = self._build_image(graph_dir / b["context"], b["name"], str(b["tag"]))
+                # Confine the build context under the artifact dir: a `context` of "/" or
+                # "../.." would otherwise tar + upload + bake arbitrary files readable by the
+                # job into the image. Resolve and require it stays within graph_dir.
+                context_dir = (graph_dir / b["context"]).resolve()
+                if not context_dir.is_relative_to(graph_root):
+                    raise SystemExit(
+                        f"[onboard] ERROR: builds context {b['context']!r} escapes the artifact dir ({context_dir})"
+                    )
+                dst_repo, digest = self._build_image(context_dir, b["name"], str(b["tag"]))
                 set_path(graph, parse_path(b["path"]), f"{self.ecr}/{dst_repo}@{digest}")
 
         if weight_paths:
