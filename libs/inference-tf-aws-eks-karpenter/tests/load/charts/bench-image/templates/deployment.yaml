@@ -1,0 +1,20 @@
+# Rendered only so the onboarder's helm-template backstop sees the vendored image ref
+# resolve to our ECR. Never actually deployed — the benchmark pulls the image directly.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bench-image
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: bench-image
+  template:
+    metadata:
+      labels:
+        app: bench-image
+    spec:
+      containers:
+        - name: bench
+          image: {{ include "chart.image" .Values.images.bench }}
+          command: ["sh", "-c", "sleep 1"]

@@ -43,6 +43,7 @@ NAMESPACE = "inference"
 LOCAL_QUEUE = "inference"
 
 
+@pytest.mark.gpu
 @pytest.mark.mutating
 def test_kueue_efa_multinode_gang(
     e2e_deployment: EndToEndDeployment,

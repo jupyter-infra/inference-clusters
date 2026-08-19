@@ -1,0 +1,8 @@
+apiVersion: v2
+name: bench-image
+version: 0.1.0
+description: >-
+  Minimal onboard chart for the parallel-pull benchmark: an images: block only (no
+  weights, no real workload). The onboarder digest-vendors the large multi-layer image
+  into this cluster's ECR so an air-gapped node can pull it for the pull-timing test.
+type: application

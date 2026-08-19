@@ -1,0 +1,22 @@
+# Timing pod for the SOCI parallel-pull benchmark: pins to a specific GPU node and pulls a
+# (freshly evicted) large image so the kubelet's `Pulled` event times a real cold CRI pull.
+# do-not-disrupt keeps Karpenter from consolidating the node mid-measurement.
+# Substitutions: ${name}, ${namespace}, ${node}, ${ref}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${name}
+  namespace: ${namespace}
+  annotations:
+    karpenter.sh/do-not-disrupt: "true"
+spec:
+  terminationGracePeriodSeconds: 2
+  nodeName: ${node}
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+  containers:
+    - name: c
+      image: ${ref}
+      command: ["sh", "-c", "exit 0"]

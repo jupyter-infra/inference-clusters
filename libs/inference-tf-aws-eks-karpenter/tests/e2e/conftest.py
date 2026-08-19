@@ -9,10 +9,18 @@ from tests.e2e import _serving_helpers as h
 
 
 def pytest_collection_modifyitems(items: list) -> None:
-    """Automatically mark all tests in this directory as e2e tests."""
+    """Mark this directory's tests e2e, and collect the GPU-scheduling ones last.
+
+    Grouping every @pytest.mark.gpu test into one trailing block means they share a single
+    warm Karpenter GPU node (no drain/re-provision between them), and the GPU-less tests —
+    notably test_health, which reads a settled node count — run before any GPU node exists,
+    so a mid-join node-exporter DaemonSet can't race their snapshot. Stable partition: order
+    within each group is preserved.
+    """
     for item in items:
         if "e2e" in str(item.fspath):
             item.add_marker(pytest.mark.e2e)
+    items.sort(key=lambda item: item.get_closest_marker("gpu") is not None)
 
 
 @pytest.fixture(scope="session", autouse=True)

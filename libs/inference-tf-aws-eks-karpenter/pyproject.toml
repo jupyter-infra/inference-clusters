@@ -83,6 +83,8 @@ testpaths = [
 ]
 markers = [
     "e2e: End-to-end tests using playwright (deselect with '-m \"not e2e\"')",
+    "benchmark: Opt-in performance benchmarks (not a pass/fail gate; run via 'just bench-*')",
+    "gpu: Schedules a Karpenter GPU node; collected last so all GPU tests share one warm node",
 ]
 
 [dependency-groups]

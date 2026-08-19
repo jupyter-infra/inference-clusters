@@ -254,6 +254,8 @@ resource "helm_release" "karpenter_nodepools" {
     { name = "cpu.memoryLimit", value = var.memory_capacity },
     { name = "gpuG.gpuLimit", value = tostring(var.gpu_g_capacity) },
     { name = "gpuP.gpuLimit", value = tostring(var.gpu_p_capacity) },
+    # Toggles the containerd parallel-pull block in the gpu/gpu-p EC2NodeClass userData.
+    { name = "gpuParallelPull.enabled", value = tostring(var.gpu_parallel_image_pull) },
     # Chart content hash so editing a chart file triggers a re-apply (see main.tf).
     { name = "chartContentHash", value = local.chart_hashes["karpenter"] },
   ]
