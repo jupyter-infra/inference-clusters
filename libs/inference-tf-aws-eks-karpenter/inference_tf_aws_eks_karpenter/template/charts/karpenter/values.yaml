@@ -83,5 +83,9 @@ blockDevice:
 #    throughput/IOPS (only when enabled) to keep storage from bottlenecking the pull.
 gpuParallelPull:
   enabled: true
+  # Recommended defaults from the karpenter-blueprints SOCI snapshotter guide:
+  # https://github.com/aws-samples/karpenter-blueprints/tree/main/blueprints/soci-snapshotter
+  # Higher values speed the pull further (until the image source or network is the
+  # bottleneck) at more EBS cost; lower values risk storage-throttling the parallel unpack.
   ebsThroughputMiBps: 600
   ebsIops: 3000
