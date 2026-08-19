@@ -21,6 +21,8 @@ TWO input formats are supported and auto-detected from the unpacked artifact dir
       lists the field-paths to rehost:
           images:  [ "resources[0].template.spec...containers[0].image", ... ]
           weights: [ "resources[0].template.spec...containers[0].args[0]", ... ]
+      Either list may be empty (e.g. a storage-only block that provisions a PV+PVC
+      pair has neither images nor weights — its graph.yaml is already air-gapped-clean).
       We read the literal ref at each path, vendor it, and write a REWRITTEN COPY —
       `graph-air-gapped.yaml` — with our ECR/S3 refs. graph.yaml is left pristine.
       Backstop: field-level — every listed image-path in the emitted graph resolves to
@@ -641,8 +643,10 @@ class Onboarder:
         sidecar = yaml.safe_load((graph_dir / "values.yaml").read_text()) or {}
         image_paths = sidecar.get("images") or []
         weight_paths = sidecar.get("weights") or []
-        if not image_paths:
-            raise SystemExit("[onboard] ERROR: graph values.yaml has no images: field-paths to rehost")
+
+        # Both lists may be empty — a storage-only block (PV+PVC, no containers/weights)
+        # has nothing to rehost and just gets its graph.yaml passed through as the
+        # emitted air-gapped copy so the deployer's single apply path still works.
 
         log(f"rehosting images to {self.ecr}/{self.prefix}/*")
         for path in image_paths:

@@ -27,6 +27,8 @@ overrides:
   # common_images: []
   # enable_fsx: false
   # fsx_storage_capacity_gib: 4800
-  # fsx_per_unit_storage_throughput: 250
+  # fsx_per_unit_storage_throughput: 0     # 0 = auto (500 if P-pool on, else 250)
+  # fsx_imported_file_chunk_size_mib: 16
   # fsx_kms_key_arn: ""
   # fsx_csi_driver_chart_version: "1.17.0"
+  # fsx_hydrate_prefixes: []               # e.g. ["qwen2.5-7b", "llama-3-70b"]

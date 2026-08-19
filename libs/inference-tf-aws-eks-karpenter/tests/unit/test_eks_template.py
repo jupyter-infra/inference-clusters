@@ -781,6 +781,23 @@ def test_fsx_uses_persistent2_ssd_lz4_with_dra() -> None:
     assert re.search(r'auto_import_policy\s*\{\s*events\s*=\s*\[.*"NEW".*\]', dra, re.DOTALL), (
         "auto_import_policy must include NEW events"
     )
+    # DELETED events MUST NOT be in auto_import: an S3-side delete (lifecycle rule fire,
+    # compromised principal, misconfigured bucket policy) would otherwise propagate to
+    # Lustre within seconds and evict running workloads' weights with no undo path. Explicit
+    # resync via `terraform destroy` on the DRA + reapply is the only sanctioned path.
+    auto_import_match = re.search(r"auto_import_policy\s*\{\s*events\s*=\s*\[([^\]]*)\]", dra, re.DOTALL)
+    assert auto_import_match is not None, "auto_import_policy events list not found"
+    assert '"DELETED"' not in auto_import_match.group(1), (
+        "auto_import_policy MUST NOT include DELETED — S3-side deletes must not silently propagate to Lustre"
+    )
+
+    # imported_file_chunk_size MUST come from the tunable var, not a hardcoded value.
+    # 1024 (the AWS default) caps every S3 object <1 GiB on a single OST — no parallel-
+    # read across servers, tail-latency-bound throughput for exactly the tensor-file
+    # workload FSx is supposed to accelerate. 16 MiB (our new default) fans across OSTs.
+    assert "imported_file_chunk_size         = var.fsx_imported_file_chunk_size_mib" in dra or (
+        "var.fsx_imported_file_chunk_size_mib" in dra
+    ), "DRA imported_file_chunk_size must be var-driven, not a hardcoded 1024"
 
 
 def test_fsx_sg_rules_are_sg_referenced_not_cidr() -> None:
@@ -868,6 +885,273 @@ def test_fsx_pv_template_is_gated_by_values_flag() -> None:
     )
     # flock is the load-bearing mount option for SafeTensors / mmap consumers.
     assert "flock" in tmpl, "FSx PV must mount with flock (POSIX file locks)"
+
+
+def test_fsx_pv_has_az_node_affinity() -> None:
+    """The FSx PV MUST embed a topology.kubernetes.io/zone nodeAffinity pointing at
+    the FSx AZ. Without it, workloads that mount the PVC can schedule cross-AZ and
+    every read/write silently pays inter-AZ transfer + higher latency.
+
+    Terraform passes fsx.availabilityZone into the chart set-values in
+    platform_storage.tf; the PV template consumes it here.
+    """
+    tmpl = (CHARTS / "storage" / "templates" / "fsx-mount.yaml").read_text()
+    assert "nodeAffinity:" in tmpl, "FSx PV must have spec.nodeAffinity (AZ-pin the workload)"
+    assert "topology.kubernetes.io/zone" in tmpl, "PV nodeAffinity must be keyed on topology.kubernetes.io/zone"
+    assert "{{ .Values.fsx.availabilityZone" in tmpl, (
+        "PV nodeAffinity zone value must be templated from .Values.fsx.availabilityZone"
+    )
+    # And the storage chart wiring must actually pass the AZ through.
+    storage = _resource((ENGINE / "platform_storage.tf").read_text(), "helm_release", "storage")
+    assert '"fsx.availabilityZone"' in storage, (
+        "helm_release.storage must set fsx.availabilityZone (from data.aws_subnet.fsx[0].availability_zone)"
+    )
+
+
+def test_fsx_hydration_job_is_gated_and_scoped() -> None:
+    """Hydration Job MUST be gated on both enable_fsx AND non-empty fsx_hydrate_prefixes
+    (an FSx-enabled cluster with no prefixes is a valid opt-in shape — don't ship a
+    Job that runs for no reason). Job spec MUST AZ-pin to the FSx AZ, tolerate the
+    system MNG taint, and mount the platform's model-store-fsx PVC.
+    """
+    content = (ENGINE / "platform_fsx_hydrate.tf").read_text()
+
+    # Every resource / module / data block MUST be gated on the combined
+    # enable_fsx && len(prefixes)>0 sentinel (local.fsx_hydrate_enabled).
+    declared = re.findall(
+        r'^(?:resource|module|data)\s+"[^"]+"\s+"([^"]+)"\s*\{',
+        content,
+        re.MULTILINE,
+    )
+    assert declared, "platform_fsx_hydrate.tf must declare at least one resource"
+    for name in declared:
+        pattern = rf'(?:resource|module|data)\s+"[^"]+"\s+"{re.escape(name)}"\s*\{{'
+        start = re.search(pattern, content)
+        assert start is not None
+        depth, idx = 1, start.end()
+        while idx < len(content) and depth > 0:
+            depth += {"{": 1, "}": -1}.get(content[idx], 0)
+            idx += 1
+        body = content[start.end() : idx - 1]
+        # for_each on the prefix map counts as gated (empty map → zero resources).
+        gated = re.search(r"count\s*=\s*local\.fsx_hydrate_enabled\s*\?\s*1\s*:\s*0", body) or (
+            "for_each = local.fsx_hydrate_prefix_slugs" in body.replace("  ", " ")
+        )
+        assert gated, (
+            f"platform_fsx_hydrate.tf resource/module/data '{name}' missing the "
+            f"local.fsx_hydrate_enabled gate OR for_each on fsx_hydrate_prefix_slugs"
+        )
+
+    # The Job MUST AZ-pin to the FSx AZ.
+    assert "topology.kubernetes.io/zone" in content, "hydration Job must nodeAffinity-pin to the FSx AZ"
+    assert "data.aws_subnet.fsx[0].availability_zone" in content, (
+        "hydration Job AZ value must come from the same source of truth as the FS "
+        "(data.aws_subnet.fsx[0].availability_zone)"
+    )
+    # And it MUST mount the platform's own model-store-fsx PVC.
+    assert 'claim_name = "model-store-fsx"' in content, (
+        "hydration Job must mount the platform-owned model-store-fsx PVC (not a per-track one)"
+    )
+    # ttl + activeDeadline present.
+    assert "ttl_seconds_after_finished" in content, "hydration Job must set ttl_seconds_after_finished"
+    assert "active_deadline_seconds" in content, "hydration Job must set active_deadline_seconds"
+
+
+def test_fsx_hydrator_iam_is_scoped_to_our_fs() -> None:
+    """The fsx_hydrator IAM policy MUST scope DRT actions to THIS file system's ARN,
+    not `Resource: *`. Two coexisting deployments in one account must never be able to
+    fire DRTs against each other's file systems via the hydrator SA.
+    """
+    content = (ENGINE / "platform_fsx_hydrate.tf").read_text()
+    doc = _extract_block(content, "data", "aws_iam_policy_document", "fsx_hydrator")
+    # Positive: our FS ARN is in the DRT statement's resources.
+    assert "aws_fsx_lustre_file_system.shared[0].arn" in doc, (
+        "fsx_hydrator DRT statement must resource-scope to our FS ARN"
+    )
+    # Positive: DRT actions granted.
+    for action in ("fsx:CreateDataRepositoryTask", "fsx:DescribeDataRepositoryTasks", "fsx:CancelDataRepositoryTask"):
+        assert action in doc, f"fsx_hydrator must grant {action}"
+    # Negative: no `Resource: *` on the DRT statement — grep the whole doc for it.
+    assert not re.search(r'resources\s*=\s*\[\s*"\*"\s*\]', doc), (
+        "fsx_hydrator DRT statement must NOT use Resource: * — scope to our FS ARN"
+    )
+    # S3 PutObject scoped to the report prefix only (referenced via the local).
+    assert "local.fsx_hydrate_report_prefix" in doc, (
+        "fsx_hydrator S3 PutObject must scope to the local.fsx_hydrate_report_prefix path"
+    )
+    # And the local's literal value must be the fsx-drt-reports subpath.
+    content_full = (ENGINE / "platform_fsx_hydrate.tf").read_text()
+    assert re.search(r'fsx_hydrate_report_prefix\s*=\s*"fsx-drt-reports"', content_full), (
+        "local.fsx_hydrate_report_prefix must equal 'fsx-drt-reports'"
+    )
+
+
+def test_fsx_per_unit_throughput_derives_from_gpu_capacity() -> None:
+    """The presets ship `fsx_per_unit_storage_throughput = 0` as a sentinel and
+    platform_fsx.tf derives the actual value from BOTH the P-pool flag AND total
+    GPU capacity (var.gpu_g_capacity + var.gpu_p_capacity). Big P-heavy clusters
+    (> 60 GPUs) get bumped to 1000 MB/s/TiB so cold-scale-out doesn't cap.
+
+    Cold-scale-out (K new pods on K new nodes at once) is the real saturation
+    risk — Lustre's per-node cache absorbs steady-state reads but not first-touch
+    reads. Kueue's nominalQuota mirrors these capacity vars, so this is the exact
+    concurrent-reader ceiling.
+    """
+    fsx = (ENGINE / "platform_fsx.tf").read_text()
+    presets = (ENGINE / "presets" / "defaults-all.tfvars").read_text()
+    # Preset sentinel is 0.
+    assert re.search(r"fsx_per_unit_storage_throughput\s*=\s*0\b", presets), (
+        "preset must ship fsx_per_unit_storage_throughput = 0 (sentinel meaning auto-derive)"
+    )
+    # platform_fsx.tf has the derivation local referencing enable_gpu_p_nodepool
+    # AND both GPU capacity variables.
+    assert "local.fsx_per_unit_storage_throughput" in fsx, (
+        "platform_fsx.tf must reference local.fsx_per_unit_storage_throughput on the FS resource"
+    )
+    assert "var.enable_gpu_p_nodepool" in fsx, "the derivation local must branch on var.enable_gpu_p_nodepool"
+    assert "var.gpu_g_capacity" in fsx and "var.gpu_p_capacity" in fsx, (
+        "the derivation local must consider total GPU capacity (gpu_g + gpu_p) — cold-scale-out "
+        "of many pods is the real saturation risk, and Kueue nominalQuota mirrors these vars"
+    )
+    # Assert the three tier thresholds appear in the file (250, 500, 1000).
+    for tier in ("250", "500", "1000"):
+        assert re.search(rf"\b{tier}\b", fsx), f"derivation must produce tier {tier}"
+
+
+def test_fsx_platform_info_configmap_is_discoverable() -> None:
+    """The fsx-platform-info ConfigMap MUST publish every field a consumer needs
+    to consume FSx from a Kubernetes-native surface — replaces the deploy-time
+    `jupyter-deploy show --output NAME` + Python substitution dance with a
+    declarative K8s object.
+
+    Consumers (KRO blocks, workload initContainers, kubectl scripts) discover
+    this by the `platform.inference/kind: storage` label — the peer
+    s3-mount-platform-info ConfigMap shares that label.
+    """
+    cm = _resource((ENGINE / "platform_fsx.tf").read_text(), "kubernetes_config_map_v1", "fsx_platform_info")
+    # Gated on enable_fsx (otherwise there's no FSx to describe).
+    assert "count = var.enable_fsx" in cm, "fsx-platform-info ConfigMap must be gated on enable_fsx"
+    # Namespace = the shared workload namespace (where consumers live).
+    assert "kubernetes_namespace_v1.workload.metadata[0].name" in cm, (
+        "fsx-platform-info ConfigMap must live in the workload namespace, not kube-system"
+    )
+    # Grouping label so consumers list by kind, not by name.
+    assert '"platform.inference/kind"    = "storage"' in cm.replace("  ", " ").replace("  ", " ") or re.search(
+        r'"platform\.inference/kind"\s*=\s*"storage"', cm
+    ), "ConfigMap must carry platform.inference/kind = storage for label-based discovery"
+    # Every field a KRO block or initContainer needs.
+    required_keys = (
+        "fileSystemId",
+        "dnsName",
+        "mountName",
+        "availabilityZone",
+        "dataRepositoryPath",
+        "mountPath",
+        "storageCapacityGib",
+        "perUnitThroughputMBpsPerTiB",
+        "aggregateGBpsMax",
+        "platformPvcName",
+    )
+    for key in required_keys:
+        assert f"{key}" in cm, f"fsx-platform-info ConfigMap missing data key '{key}'"
+
+
+def test_s3_mount_platform_info_configmap_is_discoverable() -> None:
+    """The s3-mount-platform-info ConfigMap MUST ship UNCONDITIONALLY (S3-mount is
+    always on) as a peer to fsx-platform-info, so tracks can enumerate every
+    available storage backend by listing `-l platform.inference/kind=storage` in
+    the workload namespace — one API surface across backends, not "check for
+    ConfigMap X else hardcode name Y."
+
+    Peer invariants with fsx-platform-info:
+      - workload namespace (same as FSx peer)
+      - platform.inference/kind = storage label
+      - platform.inference/backend = s3-mount label (backend-specific)
+      - platformPvcName + platformPvcNamespace so tracks discover the PVC
+        location without hardcoding
+      - capabilities string so tracks that need RWX/POSIX reject S3-mount on
+        read rather than failing at pod-schedule time
+    """
+    cm = _resource(
+        (ENGINE / "platform_storage.tf").read_text(),
+        "kubernetes_config_map_v1",
+        "s3_mount_platform_info",
+    )
+    # UNCONDITIONAL — no count expression at all (S3-mount is always installed).
+    assert "count =" not in cm, (
+        "s3-mount-platform-info ConfigMap must ship unconditionally — S3-mount is always on, unlike FSx which is opt-in"
+    )
+    # Workload namespace — where consumers live.
+    assert "kubernetes_namespace_v1.workload.metadata[0].name" in cm, (
+        "s3-mount-platform-info ConfigMap must live in the workload namespace"
+    )
+    # Discovery label + backend identifier.
+    assert re.search(r'"platform\.inference/kind"\s*=\s*"storage"', cm), (
+        "ConfigMap must carry platform.inference/kind = storage (peer with fsx-platform-info)"
+    )
+    assert re.search(r'"platform\.inference/backend"\s*=\s*"s3-mount"', cm), (
+        "ConfigMap must carry platform.inference/backend = s3-mount"
+    )
+    # Every field a track needs to discover + evaluate S3-mount.
+    required_keys = (
+        "bucketName",
+        "region",
+        "modelsPrefix",
+        "mountPath",
+        "dataRepositoryPath",
+        "platformPvcName",
+        "platformPvcNamespace",
+        "capabilities",
+    )
+    for key in required_keys:
+        assert f"{key}" in cm, f"s3-mount-platform-info ConfigMap missing data key '{key}'"
+    # Capabilities MUST surface the constraint honestly — tracks that need RWX
+    # or full POSIX consult this to reject the backend on read.
+    assert "read-only" in cm and "partial-posix" in cm, (
+        "capabilities must surface Mountpoint's constraints (read-only + partial-posix) "
+        "so tracks reject the backend when they need RWX/full-POSIX"
+    )
+
+
+def test_fsx_observability_alarms_and_grafana_ds() -> None:
+    """Observability layer (platform_fsx_observability.tf) MUST ship:
+    - a CloudWatch log-metric-filter + alarm on FSx event log WARN/ERROR/FAILED
+    - a FreeStorageCapacity alarm keyed on 20% of provisioned capacity
+    - read + write throughput-saturation alarms at 70% of FS ceiling (15 min sustained)
+    - a Grafana CloudWatch data source with an IAM policy scoped to AWS/FSx
+    """
+    content = (ENGINE / "platform_fsx_observability.tf").read_text()
+    # Four alarms — capacity, event-log, read saturation, write saturation.
+    for alarm in ("fsx_events", "fsx_free_capacity", "fsx_read_saturation", "fsx_write_saturation"):
+        block = _resource(content, "aws_cloudwatch_metric_alarm", alarm)
+        assert "count = var.enable_fsx" in block, f"alarm '{alarm}' must be gated on enable_fsx"
+    # Saturation alarms MUST divide by the derived FS ceiling local (not hardcoded)
+    # so bumping fsx_per_unit_storage_throughput auto-retunes them.
+    for alarm in ("fsx_read_saturation", "fsx_write_saturation"):
+        block = _resource(content, "aws_cloudwatch_metric_alarm", alarm)
+        assert "local.fsx_throughput_5min_ceiling_bytes" in block, (
+            f"'{alarm}' expression must divide by local.fsx_throughput_5min_ceiling_bytes "
+            "(so alarm auto-tunes when the throughput tier is bumped)"
+        )
+        # 15-minute sustained window (3 × 5-min periods) so transient spikes
+        # (KEDA cold-start, hydration replay) don't page.
+        assert re.search(r"evaluation_periods\s*=\s*3\b", block), (
+            f"'{alarm}' must require 15 min sustained (evaluation_periods = 3) — otherwise "
+            "cold-scale-out spikes false-positive"
+        )
+    # Log-metric filter wired.
+    lmf = _resource(content, "aws_cloudwatch_log_metric_filter", "fsx_events")
+    assert "aws_cloudwatch_log_group.fsx[0].name" in lmf, "log-metric-filter must target the FSx event log group"
+    # Grafana CW IAM is scoped to AWS/FSx via a cloudwatch:namespace condition.
+    doc = _extract_block(content, "data", "aws_iam_policy_document", "grafana_cloudwatch")
+    assert "cloudwatch:namespace" in doc and '"AWS/FSx"' in doc, (
+        "Grafana CloudWatch GetMetricData must be namespace-scoped to AWS/FSx (IAM condition)"
+    )
+    # Datasource ConfigMap has the grafana_datasource label the chart's sidecar watches.
+    cm = _resource(content, "kubernetes_config_map_v1", "grafana_fsx_datasource")
+    assert 'grafana_datasource = "1"' in cm, (
+        "Grafana datasource ConfigMap must carry the `grafana_datasource: 1` label for auto-discovery"
+    )
 
 
 def test_onboarder_backstop_and_workload_repos_cluster_scoped() -> None:

@@ -226,6 +226,21 @@ resource "aws_iam_role_policy" "s3_csi" {
 # var.enable_fsx is true — the FSx for Lustre static PV/PVC. One helm_release so
 # the objects install/uninstall atomically and teardown-order cleanly before the CSI
 # drivers (via depends_on cluster_addons + helm_release.fsx_csi_driver).
+locals {
+  # S3-mount mount path inside consumer pods. The chart doesn't own the mountPath
+  # (Mountpoint's client is pointed at whatever the pod's volumeMounts.mountPath is),
+  # so this is the CONVENTION the platform publishes for tracks to follow. Matches
+  # the FSx mount path so a track that flips between backends doesn't have to change
+  # its container's volume mount path.
+  s3_mount_path = "/models"
+
+  # PVC name + namespace the storage chart materializes for S3-mount. The
+  # s3_mount_platform_info ConfigMap advertises these so tracks discover them
+  # rather than hardcoding.
+  s3_mount_pvc_name      = "model-store"
+  s3_mount_pvc_namespace = "default"
+}
+
 resource "helm_release" "storage" {
   name      = "storage"
   chart     = "${path.module}/../charts/storage"
@@ -247,6 +262,8 @@ resource "helm_release" "storage" {
       { name = "fsx.fileSystemId", value = aws_fsx_lustre_file_system.shared[0].id },
       { name = "fsx.dnsName", value = aws_fsx_lustre_file_system.shared[0].dns_name },
       { name = "fsx.mountName", value = aws_fsx_lustre_file_system.shared[0].mount_name },
+      # AZ hint embedded on the PV as spec.nodeAffinity — see charts/storage/templates/fsx-mount.yaml.
+      { name = "fsx.availabilityZone", value = data.aws_subnet.fsx[0].availability_zone },
       { name = "fsx.capacity", value = "${var.fsx_storage_capacity_gib}Gi" },
       { name = "fsx.claimNamespace", value = kubernetes_namespace_v1.workload.metadata[0].name },
     ] : [],
@@ -258,5 +275,57 @@ resource "helm_release" "storage" {
     module.node_group,
     helm_release.fsx_csi_driver,
     aws_fsx_data_repository_association.models,
+  ]
+}
+
+# --- s3-mount-platform-info ConfigMap: peer discovery handle for S3-mount ---
+#
+# Symmetric with fsx-platform-info (platform_fsx.tf). Publishes S3-mount identity as
+# a first-class K8s object so tracks discover storage backends by listing
+# `-l platform.inference/kind=storage` — one code path across FSx and S3-mount rather
+# than "check-for-ConfigMap else hardcode-defaults." Unconditional (S3-mount is
+# always on, unlike FSx which is opt-in).
+#
+# `capabilities` and `platformPvcNamespace` are the load-bearing fields for
+# backend selection:
+#   - capabilities: "read-only, partial-posix" — surfaces the honest constraints
+#     (Mountpoint doesn't support atomic renames, POSIX locking, or writes to
+#     existing keys). A track that needs RWX/POSIX rejects this backend on read.
+#   - platformPvcNamespace: today the S3-mount PVC lands in "default" (values.yaml
+#     default, never overridden). Cross-namespace PVC consumption isn't supported
+#     natively, so the ConfigMap surfaces the ACTUAL location. A follow-up will
+#     relocate it to the workload namespace (matching the FSx placement); the
+#     ConfigMap update rolls with that move.
+resource "kubernetes_config_map_v1" "s3_mount_platform_info" {
+  metadata {
+    name      = "s3-mount-platform-info"
+    namespace = kubernetes_namespace_v1.workload.metadata[0].name
+    labels = {
+      "platform.inference/kind"    = "storage"
+      "platform.inference/backend" = "s3-mount"
+    }
+    annotations = {
+      "platform.inference/deployment-id" = random_id.postfix.hex
+    }
+  }
+
+  data = {
+    bucketName             = module.model_store.bucket_name
+    region                 = data.aws_region.current.id
+    modelsPrefix           = local.model_store_models_prefix
+    mountPath              = local.s3_mount_path
+    dataRepositoryPath     = "s3://${module.model_store.bucket_name}/${local.model_store_models_prefix}/"
+    platformPvcName        = local.s3_mount_pvc_name
+    platformPvcNamespace   = local.s3_mount_pvc_namespace
+    # Honest labeling: Mountpoint mounts are ReadOnlyMany + partial POSIX. Tracks
+    # that need RWX or full POSIX (locking, atomic rename) reject this backend on
+    # read and fall through to FSx (or fail loud when FSx isn't enabled).
+    capabilities           = "read-only, partial-posix"
+  }
+
+  depends_on = [
+    null_resource.cluster_addons,
+    module.node_group,
+    helm_release.storage,
   ]
 }

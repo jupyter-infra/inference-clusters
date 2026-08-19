@@ -34,6 +34,19 @@ spec:
     - flock
     - noatime
     - _netdev
+  # AZ pin — FSx for Lustre is single-AZ (subnet_ids has exactly one). Any pod on a
+  # different-AZ node pays inter-AZ transfer + higher latency on every read/write.
+  # Embedding topology.kubernetes.io/zone here makes kube-scheduler refuse to bind a
+  # PVC-consuming pod on the wrong-AZ node, so Karpenter provisions in the FSx AZ.
+  # Operator-transparent — track owners don't need to remember to pin their pods.
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: topology.kubernetes.io/zone
+              operator: In
+              values:
+                - {{ .Values.fsx.availabilityZone | quote }}
   csi:
     driver: fsx.csi.aws.com
     volumeHandle: {{ .Values.fsx.fileSystemId }}::{{ .Values.fsx.mountName }}
