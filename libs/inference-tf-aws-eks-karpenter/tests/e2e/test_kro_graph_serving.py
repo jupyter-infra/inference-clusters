@@ -44,6 +44,7 @@ def _child_count() -> int:
     return n
 
 
+@pytest.mark.gpu
 @pytest.mark.full_deployment
 def test_kro_graph_onboards_and_serves_without_helm(e2e_deployment: EndToEndDeployment) -> None:
     e2e_deployment.ensure_deployed()

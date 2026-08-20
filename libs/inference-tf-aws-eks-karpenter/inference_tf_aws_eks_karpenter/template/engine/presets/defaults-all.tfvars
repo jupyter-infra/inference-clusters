@@ -88,3 +88,6 @@ workload_namespace       = "inference"
 enable_efa                      = false
 efa_device_plugin_chart_version = "v0.5.30"
 efa_device_plugin_image_tag     = "v0.5.20" # chart v0.5.30 appVersion; vendored into ECR
+
+# --- GPU node image-pull acceleration (SOCI snapshotter parallel pull/unpack) ---
+gpu_parallel_image_pull = true
