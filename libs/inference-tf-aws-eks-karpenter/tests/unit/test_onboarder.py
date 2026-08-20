@@ -54,6 +54,7 @@ class FakeRunner(co.Runner):
         super().__init__(dry_run=True)
         self.copied: list[tuple[str, str]] = []
         self.ingested: list[tuple[str, str]] = []
+        self.built: list[tuple[str, str, str]] = []
 
     def resolve_digest(self, src_ref: str) -> str:
         return FAKE_DIGEST
@@ -64,9 +65,26 @@ class FakeRunner(co.Runner):
     def ingest_weights(self, source: str, dst_uri: str, name: str) -> None:
         self.ingested.append((source, dst_uri))
 
+    def build_image(
+        self, project: str, context_dir: Path, input_uri: str, name: str, tag: str, timeout: int = 1800
+    ) -> None:
+        self.built.append((project, name, tag))
+
 
 def _onboarder(runner: co.Runner) -> Any:
     return co.Onboarder(ecr_registry=ECR, workload_prefix="workload", models_s3_uri=MODELS, runner=runner)
+
+
+def _onboarder_with_build(runner: co.Runner) -> Any:
+    """Onboarder wired with image-build coordinates, so a graph `builds:` block resolves."""
+    return co.Onboarder(
+        ecr_registry=ECR,
+        workload_prefix="workload",
+        models_s3_uri=MODELS,
+        runner=runner,
+        image_build_project="inference-abc-image-build",
+        image_build_input="s3://inference-abc-store/image-build/in",
+    )
 
 
 class TestPureCore(unittest.TestCase):
@@ -232,6 +250,100 @@ class TestPathBGraph(unittest.TestCase):
             (graph / "values.yaml").write_text("images: []\n")
             with self.assertRaises(SystemExit):
                 co.onboard(graph, tmp, _onboarder(FakeRunner()))
+
+
+class TestPathBBuilds(unittest.TestCase):
+    """Path B `builds:` — an image with NO published upstream is BUILT via the image-build
+    primitive and its field-path rewritten to our ECR @digest, same shape as a vendored image."""
+
+    IMAGE_PATH = "spec.resources[0].template.spec.template.spec.containers[0].image"
+
+    def _stage_with_build(self, tmp: Path, sidecar: str, make_ctx: bool = True) -> Path:
+        graph = tmp / "mock-graph"
+        shutil.copytree(CHARTS / "mock-graph", graph)
+        (graph / "values.yaml").write_text(sidecar)
+        if make_ctx:
+            ctx = graph / "aiperf-ctx"
+            ctx.mkdir()
+            (ctx / "Dockerfile").write_text("FROM public.ecr.aws/docker/library/python:3.12-slim\n")
+        return graph
+
+    def _build_sidecar(self, images: str = "images: []\n") -> str:
+        return (
+            images + "builds:\n"
+            f"  - path: {self.IMAGE_PATH}\n"
+            "    context: aiperf-ctx\n"
+            "    name: aiperf\n"
+            '    tag: "0.9.0"\n'
+        )
+
+    def test_build_entry_builds_and_rewrites_to_ecr_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            graph = self._stage_with_build(tmp, self._build_sidecar())
+            original = (graph / "graph.yaml").read_text()
+            runner = FakeRunner()
+            result = co.onboard(graph, tmp, _onboarder_with_build(runner))
+
+            emitted = yaml.safe_load(result.output_file.read_text())
+            val = co.get_path(emitted, co.parse_path(self.IMAGE_PATH))
+            self.assertEqual(val, f"{ECR}/workload/aiperf@{FAKE_DIGEST}")
+            # the image-build job was actually triggered with (project, name, tag)
+            self.assertEqual(runner.built, [("inference-abc-image-build", "aiperf", "0.9.0")])
+            # source graph.yaml left pristine
+            self.assertEqual((graph / "graph.yaml").read_text(), original)
+
+    def test_builds_without_image_build_coords_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            graph = self._stage_with_build(tmp, self._build_sidecar())
+            # _onboarder() has no image-build coordinates -> the builds: block can't resolve.
+            with self.assertRaises(SystemExit) as cm:
+                co.onboard(graph, tmp, _onboarder(FakeRunner()))
+            self.assertIn("IMAGE_BUILD_PROJECT", str(cm.exception))
+
+    def test_builds_missing_context_dir_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            graph = self._stage_with_build(tmp, self._build_sidecar(), make_ctx=False)
+            with self.assertRaises(SystemExit) as cm:
+                co.onboard(graph, tmp, _onboarder_with_build(FakeRunner()))
+            self.assertIn("build context", str(cm.exception))
+
+    def test_builds_entry_missing_keys_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            sidecar = f"images: []\nbuilds:\n  - path: {self.IMAGE_PATH}\n    context: aiperf-ctx\n"
+            graph = self._stage_with_build(tmp, sidecar)
+            with self.assertRaises(SystemExit) as cm:
+                co.onboard(graph, tmp, _onboarder_with_build(FakeRunner()))
+            self.assertIn("missing keys", str(cm.exception))
+
+    def test_builds_context_escaping_artifact_dir_fails(self) -> None:
+        # A `context` that resolves outside the artifact dir (absolute or ../..) would tar +
+        # upload + bake arbitrary files into the image — must be rejected before any build.
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            sidecar = (
+                "images: []\nbuilds:\n"
+                f"  - path: {self.IMAGE_PATH}\n"
+                "    context: ../../../../etc\n"
+                "    name: aiperf\n"
+                '    tag: "0.9.0"\n'
+            )
+            graph = self._stage_with_build(tmp, sidecar, make_ctx=False)
+            with self.assertRaises(SystemExit) as cm:
+                co.onboard(graph, tmp, _onboarder_with_build(FakeRunner()))
+            self.assertIn("escapes the artifact dir", str(cm.exception))
+
+    def test_builds_non_mapping_entry_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            sidecar = "images: []\nbuilds:\n  - just-a-string\n"
+            graph = self._stage_with_build(tmp, sidecar, make_ctx=False)
+            with self.assertRaises(SystemExit) as cm:
+                co.onboard(graph, tmp, _onboarder_with_build(FakeRunner()))
+            self.assertIn("must be a mapping", str(cm.exception))
 
 
 class FakeS3Client:
