@@ -9,6 +9,7 @@ merely mirrors them is churn, not a guard. Parsing is regex + brace-matching (no
 """
 
 import re
+import subprocess
 
 import yaml
 
@@ -16,6 +17,28 @@ from inference_tf_aws_eks_karpenter.template import TEMPLATE_PATH
 
 ENGINE = TEMPLATE_PATH / "engine"
 CHARTS = TEMPLATE_PATH / "charts"
+
+
+def _render_karpenter(**values: str) -> list[dict]:
+    """Render the karpenter chart with helm and return its parsed YAML docs.
+
+    A set-values dict overrides chart values.
+    """
+    sets = ["--set", "gpuAmiId=a", "--set", "nodeInstanceProfile=p", "--set", "discoveryTag=t"]
+    for k, v in values.items():
+        sets += ["--set", f"{k}={v}"]
+    out = subprocess.run(
+        ["helm", "template", str(CHARTS / "karpenter"), *sets], check=True, capture_output=True, text=True
+    ).stdout
+    return [d for d in yaml.safe_load_all(out) if d]
+
+
+def _nodeclass(docs: list[dict], name: str) -> dict:
+    """The EC2NodeClass doc named `name`."""
+    for d in docs:
+        if d.get("kind") == "EC2NodeClass" and d["metadata"]["name"] == name:
+            return d
+    raise AssertionError(f"EC2NodeClass {name} not rendered")
 
 
 def _extract_block(content: str, kind: str, type_: str, name: str) -> str:
@@ -1167,6 +1190,37 @@ def test_onboarder_backstop_and_workload_repos_cluster_scoped() -> None:
     )
     doc = _extract_block(content, "data", "aws_iam_policy_document", "onboarder_extra")
     assert "ecr:TagResource" in doc, "onboarder must be allowed to tag the repos it creates"
+
+
+def test_gpu_parallel_pull_gate_only_on_gpu_classes() -> None:
+    """gpu_parallel_image_pull toggles the FastImagePull gate on gpu + gpu-p (never cpu)."""
+    on = _render_karpenter(**{"gpuParallelPull.enabled": "true"})
+    for name in ("gpu", "gpu-p"):
+        assert "FastImagePull: true" in _nodeclass(on, name)["spec"].get("userData", ""), (
+            f"{name} must carry the FastImagePull gate when enabled"
+        )
+    assert "FastImagePull" not in _nodeclass(on, "cpu")["spec"].get("userData", ""), (
+        "cpu must never carry the FastImagePull gate"
+    )
+    off = _render_karpenter(**{"gpuParallelPull.enabled": "false"})
+    for name in ("gpu", "gpu-p", "cpu"):
+        assert "FastImagePull" not in _nodeclass(off, name)["spec"].get("userData", ""), (
+            f"{name} must not carry the gate when disabled"
+        )
+
+
+def test_gpu_parallel_pull_ebs_tuning_only_on_gpu_classes() -> None:
+    """When enabled, gpu + gpu-p root volumes get the SOCI EBS throughput/IOPS; cpu never does."""
+    on = _render_karpenter(**{"gpuParallelPull.enabled": "true"})
+    for name in ("gpu", "gpu-p"):
+        ebs = _nodeclass(on, name)["spec"]["blockDeviceMappings"][0]["ebs"]
+        assert ebs.get("throughput") == 600 and ebs.get("iops") == 3000, f"{name} missing SOCI EBS tuning: {ebs}"
+    cpu_ebs = _nodeclass(on, "cpu")["spec"]["blockDeviceMappings"][0]["ebs"]
+    assert "throughput" not in cpu_ebs and "iops" not in cpu_ebs, f"cpu must not get SOCI EBS tuning: {cpu_ebs}"
+    off = _render_karpenter(**{"gpuParallelPull.enabled": "false"})
+    for name in ("gpu", "gpu-p"):
+        ebs = _nodeclass(off, name)["spec"]["blockDeviceMappings"][0]["ebs"]
+        assert "throughput" not in ebs, f"{name} must not get EBS tuning when disabled: {ebs}"
 
 
 def test_workload_repo_cleanup_runs_after_creators() -> None:

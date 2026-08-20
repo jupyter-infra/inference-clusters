@@ -78,6 +78,7 @@ def _wait_settled_at_zero(release: str, *, stable_reads: int = 3, interval_s: in
     )
 
 
+@pytest.mark.gpu
 @pytest.mark.full_deployment
 def test_keda_scales_vllm_from_zero_via_router(e2e_deployment: EndToEndDeployment) -> None:
     e2e_deployment.ensure_deployed()

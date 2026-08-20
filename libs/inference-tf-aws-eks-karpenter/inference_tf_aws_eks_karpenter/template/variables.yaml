@@ -24,6 +24,7 @@ overrides:
   # kro_chart_version: "0.9.2"
   # enable_gpu_p_nodepool: true
   # gpu_p_capacity_reservation_id: ""
+  # gpu_parallel_image_pull: true
   # common_images: []
   # enable_fsx: false
   # fsx_storage_capacity_gib: 4800

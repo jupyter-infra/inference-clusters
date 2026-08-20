@@ -662,3 +662,27 @@ def assert_pods_on_system_mng(namespace: str, helm_release: str) -> None:
     assert_pods_by_selector_on_system_mng(
         namespace, f"app.kubernetes.io/instance={helm_release}", f"release {helm_release}"
     )
+
+
+def node_shell(node: str, image: str, script: str) -> str:
+    """Run a shell script on a node's host root via `kubectl debug node/<n>` (chroot /host).
+
+    --attach is required: without it `kubectl debug node/` returns only the "Creating..." notice
+    and the command's stdout is never captured. check=True so a failed debug-pod launch surfaces
+    loudly rather than as empty stdout that trips a confusing downstream assertion; the caller's
+    `script` is responsible for swallowing its own expected non-fatal errors (e.g. `2>/dev/null`).
+    """
+    return run_kubectl(
+        "debug",
+        f"node/{node}",
+        "-q",
+        "--attach",
+        f"--image={image}",
+        "--",
+        "chroot",
+        "/host",
+        "sh",
+        "-c",
+        script,
+        check=True,
+    ).stdout

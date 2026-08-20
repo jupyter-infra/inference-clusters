@@ -550,10 +550,14 @@ test-e2e project_dir="sandbox-e2e" test_filter="" options="" template=default-te
         just e2e-sync
     fi
 
-    # Resolve the E2E tests directory for the template.
-    E2E_TESTS_DIR="libs/{{template}}/tests/e2e"
+    # Resolve the tests directory for the template (default tests/e2e; tests-subdir=<x> overrides).
+    TESTS_SUBDIR="e2e"
+    if echo "{{options}}" | grep -qE "tests-subdir=[a-zA-Z0-9_-]+"; then
+        TESTS_SUBDIR=$(echo "{{options}}" | grep -oE "tests-subdir=[a-zA-Z0-9_-]+" | cut -d'=' -f2)
+    fi
+    E2E_TESTS_DIR="libs/{{template}}/tests/$TESTS_SUBDIR"
     if [ ! -d "$E2E_TESTS_DIR" ]; then
-        echo "Error: Could not find E2E tests directory: $E2E_TESTS_DIR"
+        echo "Error: Could not find tests directory: $E2E_TESTS_DIR"
         exit 1
     fi
 
@@ -607,6 +611,12 @@ test-e2e project_dir="sandbox-e2e" test_filter="" options="" template=default-te
 # Example: just test-e2e-eks-karpenter sandbox-e2e "" full-deploy=true,destroy=true
 test-e2e-eks-karpenter project_dir="sandbox-e2e" test_filter="" options="":
     @just test-e2e {{project_dir}} "{{test_filter}}" "{{options}}" inference-tf-aws-eks-karpenter
+
+# Opt-in GPU parallel-image-pull benchmark (tests/load, not a pass/fail gate). Times a real
+# kubelet pod pull on vs off on one GPU node. Runs against an existing deployed project.
+# Example: just bench-gpu-parallel-pull sandbox-e2e
+bench-gpu-parallel-pull project_dir="sandbox-e2e":
+    @just test-e2e {{project_dir}} "" tests-subdir=load,marker=benchmark,full-deploy=true inference-tf-aws-eks-karpenter
 
 # Full workflow: start container (builds if needed) then run tests
 e2e-all project_dir="sandbox-e2e" test_filter="" options="" no_cache="false" template=default-template:

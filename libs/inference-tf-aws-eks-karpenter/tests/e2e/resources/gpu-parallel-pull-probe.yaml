@@ -1,0 +1,48 @@
+# Single GPU pod for the parallel-image-pull E2E test.
+#
+# Requests 1 GPU so Karpenter provisions a single g-tier `gpu` node — exercising the
+# real pull path the feature accelerates. Serves a tiny HTTP endpoint with a readiness
+# probe, so pod-Ready proves BOTH a successful image pull AND that it can serve traffic.
+#
+# Substitutions: ${image}, ${namespace}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-parallel-pull-probe
+  namespace: ${namespace}
+  labels:
+    app: gpu-parallel-pull-probe
+  annotations:
+    # Keep Karpenter from consolidating the node out from under the test.
+    karpenter.sh/do-not-disrupt: "true"
+spec:
+  terminationGracePeriodSeconds: 5
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+  containers:
+    - name: probe
+      image: ${image}
+      # busybox httpd serving a static "ok" on :8080 — the readinessProbe below gates
+      # Ready on it responding, so a Ready pod == image pulled + serving.
+      command:
+        - sh
+        - -c
+        - 'mkdir -p /www && printf ok > /www/ping && exec httpd -f -p 8080 -h /www'
+      ports:
+        - containerPort: 8080
+      readinessProbe:
+        httpGet:
+          path: /ping
+          port: 8080
+        initialDelaySeconds: 3
+        periodSeconds: 5
+        failureThreshold: 30
+      resources:
+        requests:
+          nvidia.com/gpu: "1"
+          cpu: "1"
+          memory: "2Gi"
+        limits:
+          nvidia.com/gpu: "1"

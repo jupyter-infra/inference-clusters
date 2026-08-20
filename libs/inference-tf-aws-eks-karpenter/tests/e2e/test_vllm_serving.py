@@ -24,6 +24,7 @@ CHART = h.CHARTS_DIR / "vllm-qwen"
 RELEASE = "vllm-qwen-e2e"
 
 
+@pytest.mark.gpu
 @pytest.mark.full_deployment
 def test_vllm_qwen_serves_on_karpenter_gpu(e2e_deployment: EndToEndDeployment) -> None:
     e2e_deployment.ensure_deployed()

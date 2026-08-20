@@ -635,3 +635,16 @@ variable "fsx_hydrate_prefixes" {
   EOT
   type        = list(string)
 }
+variable "gpu_parallel_image_pull" {
+  description = <<-EOT
+    Whether to enable the SOCI snapshotter (parallel pull/unpack) on GPU nodes.
+
+    GPU/ML container images are multi-GB. When true, the gpu and gpu-p EC2NodeClasses
+    set nodeadm's FastImagePull feature gate, which on AL2023 turns on SOCI parallel
+    mode: image layers download and unpack concurrently, cutting multi-GB pull times.
+    CPU nodes are unaffected.
+
+    Recommended: true
+  EOT
+  type        = bool
+}

@@ -149,6 +149,7 @@ def test_kueue_gang_schedules_lws_group_cpu(
         run_kubectl("delete", "leaderworkerset", lws_name, "-n", NAMESPACE, "--ignore-not-found", check=False)
 
 
+@pytest.mark.gpu
 @pytest.mark.mutating
 def test_kueue_gang_schedules_on_gpu_nodes(
     kueue_lws_enabled: EndToEndDeployment,

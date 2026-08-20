@@ -101,3 +101,5 @@ fsx_imported_file_chunk_size_mib = 16
 fsx_kms_key_arn                  = ""
 fsx_csi_driver_chart_version     = "1.17.0"
 fsx_hydrate_prefixes             = []
+# --- GPU node image-pull acceleration (SOCI snapshotter parallel pull/unpack) ---
+gpu_parallel_image_pull = true
