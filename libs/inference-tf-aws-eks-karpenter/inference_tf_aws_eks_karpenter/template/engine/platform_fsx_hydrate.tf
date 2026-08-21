@@ -253,11 +253,16 @@ resource "kubernetes_job_v1" "fsx_hydrate" {
                 || { echo "[hydrate] FAIL: /mnt/models is not lustre"; mount; exit 1; }
 
               # 1) Refresh Lustre namespace against S3 via a DRT (async on AWS side).
-              echo "[hydrate] create DRT IMPORT_METADATA_FROM_REPOSITORY for /models/$PREFIX"
+              # DRT --paths is a Lustre-absolute path. The DRA is file_system_path="/"
+              # (Lustre root ⇄ s3://<bucket>/models/), so a workload prefix like
+              # "model-a" maps to Lustre "/model-a" — NOT "/models/model-a". The pod
+              # mounts Lustre root at /mnt/models, so /mnt/models/$PREFIX below is
+              # the SAME Lustre location the DRT is targeting here.
+              echo "[hydrate] create DRT IMPORT_METADATA_FROM_REPOSITORY for /$PREFIX"
               TASK_ID=$(aws fsx create-data-repository-task \
                 --file-system-id "$FS_ID" \
                 --type IMPORT_METADATA_FROM_REPOSITORY \
-                --paths "/models/$PREFIX" \
+                --paths "/$PREFIX" \
                 --report "Enabled=true,Path=$REPORT_URI/$SLUG,Format=REPORT_CSV_20191124,Scope=FAILED_FILES_ONLY" \
                 --region "$AWS_REGION" \
                 --query 'DataRepositoryTask.TaskId' --output text)

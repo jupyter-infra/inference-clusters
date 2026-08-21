@@ -822,6 +822,42 @@ def test_fsx_uses_persistent2_ssd_lz4_with_dra() -> None:
         "var.fsx_imported_file_chunk_size_mib" in dra
     ), "DRA imported_file_chunk_size must be var-driven, not a hardcoded 1024"
 
+    # file_system_path MUST be "/" (Lustre root ⇄ S3 models/ prefix). Any other value
+    # (notably "/models") double-nests the imported content — S3 `models/foo.bin` ends
+    # up at Lustre `/models/foo.bin` while the pod (which mounts Lustre root at
+    # /models) then sees it at `/models/models/foo.bin`. The hydration Job's
+    # `/mnt/models/$PREFIX` path would then refer to a nonexistent Lustre `/$PREFIX`,
+    # take the "doesn't exist" fallback branch, and touch the sentinel while warming
+    # zero bytes (roborev's High finding, tracked across every pre-fix commit).
+    assert re.search(r'file_system_path\s*=\s*"/"(?!\w)', dra), (
+        "DRA file_system_path MUST be \"/\" so Lustre root maps directly to the "
+        "S3 models/ prefix — the pod mounts Lustre root at /models, so S3 "
+        "models/foo.bin appears at pod /models/foo.bin (mirroring the S3-mount PV "
+        "layout). Any nested path (e.g. \"/models\") silently no-ops hydration."
+    )
+
+
+def test_fsx_hydration_drt_paths_match_lustre_layout() -> None:
+    """The DRT in the hydration Job MUST target Lustre `/$PREFIX` (not `/models/$PREFIX`).
+
+    With DRA file_system_path="/", Lustre root == the S3 models/ prefix, so a workload
+    prefix like "model-a" lives at Lustre "/model-a". The DRT's `--paths` argument is
+    a Lustre-absolute path; passing "/models/$PREFIX" here refreshes a Lustre subtree
+    that doesn't exist under our DRA mapping — the DRT reports SUCCEEDED (empty scope)
+    while nothing is warmed. This guard fails loud if someone regresses the path.
+    """
+    content = (ENGINE / "platform_fsx_hydrate.tf").read_text()
+    assert re.search(r'--paths\s+"/\$PREFIX"', content), (
+        "hydration DRT --paths MUST be \"/$PREFIX\" (matching DRA file_system_path=\"/\"). "
+        "Using \"/models/$PREFIX\" targets a nonexistent Lustre subtree and silently no-ops."
+    )
+    # The pod-side setstripe/find/hsm_state ops must stay on /mnt/models/$PREFIX
+    # (== Lustre /$PREFIX via the pod's mount of Lustre root at /mnt/models).
+    assert re.search(r'/mnt/models/\$PREFIX', content), (
+        "hydration script must operate on /mnt/models/$PREFIX (the pod path corresponding "
+        "to Lustre /$PREFIX given the pod mounts Lustre root at /mnt/models)"
+    )
+
 
 def test_fsx_sg_rules_are_sg_referenced_not_cidr() -> None:
     """FSx SG rules MUST source by SG reference (not CIDR).

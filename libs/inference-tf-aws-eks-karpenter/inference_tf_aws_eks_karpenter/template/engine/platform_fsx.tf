@@ -218,10 +218,25 @@ resource "aws_fsx_lustre_file_system" "shared" {
   }
 }
 
-# --- Data Repository Association: /models ⇄ s3://<model_store>/models/ ---
+# --- Data Repository Association: Lustre root ⇄ s3://<model_store>/models/ ---
+#
+# `file_system_path = "/"` maps the S3 `models/` prefix directly to the Lustre
+# root. The FSx CSI PV mounts Lustre root (no subdir) at the pod's mountpoint,
+# and pods mount at /models (see local.fsx_mount_path + charts/storage/fsx-mount.yaml),
+# so an S3 object at `models/model-a/config.json` shows up at pod path
+# `/models/model-a/config.json` — same layout as the S3-mount (Mountpoint) PV,
+# so a track can flip backends without changing its mount paths.
+#
+# Earlier attempts set `file_system_path = "/models"` here. That put S3 content
+# at Lustre `/models/*`, which the PV (rooted at Lustre `/`) then exposed at pod
+# `/models/models/*` — one level deeper than every consumer expected. The
+# hydration Job's `/mnt/models/$PREFIX` path then referenced Lustre `/$PREFIX`
+# (a nonexistent path), took the "doesn't exist" fallback branch, touched the
+# sentinel, and reported success while warming zero bytes. Roborev flagged this
+# on every commit before the fix.
 #
 # S3 is the source of truth. Import events reflect onboarder writes into Lustre;
-# export events off — workloads never write back to /models.
+# export events off — workloads never write back.
 # batch_import_meta_data_on_create indexes every pre-existing object at DRA-create
 # time (otherwise only files uploaded AFTER DRA creation appear in Lustre).
 #
@@ -240,7 +255,7 @@ resource "aws_fsx_data_repository_association" "models" {
 
   file_system_id                   = aws_fsx_lustre_file_system.shared[0].id
   data_repository_path             = "s3://${module.model_store.bucket_name}/${local.model_store_models_prefix}/"
-  file_system_path                 = local.fsx_mount_path
+  file_system_path                 = "/"
   batch_import_meta_data_on_create = true
   imported_file_chunk_size         = var.fsx_imported_file_chunk_size_mib
   delete_data_in_filesystem        = false

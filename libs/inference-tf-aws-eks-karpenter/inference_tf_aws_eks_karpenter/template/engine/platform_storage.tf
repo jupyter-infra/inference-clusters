@@ -310,17 +310,17 @@ resource "kubernetes_config_map_v1" "s3_mount_platform_info" {
   }
 
   data = {
-    bucketName             = module.model_store.bucket_name
-    region                 = data.aws_region.current.id
-    modelsPrefix           = local.model_store_models_prefix
-    mountPath              = local.s3_mount_path
-    dataRepositoryPath     = "s3://${module.model_store.bucket_name}/${local.model_store_models_prefix}/"
-    platformPvcName        = local.s3_mount_pvc_name
-    platformPvcNamespace   = local.s3_mount_pvc_namespace
+    bucketName           = module.model_store.bucket_name
+    region               = data.aws_region.current.id
+    modelsPrefix         = local.model_store_models_prefix
+    mountPath            = local.s3_mount_path
+    dataRepositoryPath   = "s3://${module.model_store.bucket_name}/${local.model_store_models_prefix}/"
+    platformPvcName      = local.s3_mount_pvc_name
+    platformPvcNamespace = local.s3_mount_pvc_namespace
     # Honest labeling: Mountpoint mounts are ReadOnlyMany + partial POSIX. Tracks
     # that need RWX or full POSIX (locking, atomic rename) reject this backend on
     # read and fall through to FSx (or fail loud when FSx isn't enabled).
-    capabilities           = "read-only, partial-posix"
+    capabilities = "read-only, partial-posix"
   }
 
   depends_on = [
