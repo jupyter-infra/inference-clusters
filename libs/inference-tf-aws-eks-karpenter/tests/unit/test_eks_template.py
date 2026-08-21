@@ -837,10 +837,10 @@ def test_fsx_uses_persistent2_ssd_lz4_with_dra() -> None:
     # take the "doesn't exist" fallback branch, and touch the sentinel while warming
     # zero bytes (roborev's High finding, tracked across every pre-fix commit).
     assert re.search(r'file_system_path\s*=\s*"/"(?!\w)', dra), (
-        "DRA file_system_path MUST be \"/\" so Lustre root maps directly to the "
+        'DRA file_system_path MUST be "/" so Lustre root maps directly to the '
         "S3 models/ prefix — the pod mounts Lustre root at /models, so S3 "
         "models/foo.bin appears at pod /models/foo.bin (mirroring the S3-mount PV "
-        "layout). Any nested path (e.g. \"/models\") silently no-ops hydration."
+        'layout). Any nested path (e.g. "/models") silently no-ops hydration.'
     )
 
 
@@ -855,12 +855,12 @@ def test_fsx_hydration_drt_paths_match_lustre_layout() -> None:
     """
     content = (ENGINE / "platform_fsx_hydrate.tf").read_text()
     assert re.search(r'--paths\s+"/\$PREFIX"', content), (
-        "hydration DRT --paths MUST be \"/$PREFIX\" (matching DRA file_system_path=\"/\"). "
-        "Using \"/models/$PREFIX\" targets a nonexistent Lustre subtree and silently no-ops."
+        'hydration DRT --paths MUST be "/$PREFIX" (matching DRA file_system_path="/"). '
+        'Using "/models/$PREFIX" targets a nonexistent Lustre subtree and silently no-ops.'
     )
     # The pod-side setstripe/find/hsm_state ops must stay on /mnt/models/$PREFIX
     # (== Lustre /$PREFIX via the pod's mount of Lustre root at /mnt/models).
-    assert re.search(r'/mnt/models/\$PREFIX', content), (
+    assert re.search(r"/mnt/models/\$PREFIX", content), (
         "hydration script must operate on /mnt/models/$PREFIX (the pod path corresponding "
         "to Lustre /$PREFIX given the pod mounts Lustre root at /mnt/models)"
     )

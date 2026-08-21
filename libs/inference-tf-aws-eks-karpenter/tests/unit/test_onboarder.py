@@ -257,13 +257,21 @@ class TestPathBGraph(unittest.TestCase):
             co.onboard(graph, tmp, _onboarder(runner))
             self.assertEqual(runner.ingested, [(source, f"{MODELS}/mock-tiny")])
 
-    def test_graph_without_image_paths_fails(self) -> None:
+    def test_graph_without_image_or_weight_paths_emits_pristine_air_gapped(self) -> None:
+        # A storage-only block (PV+PVC, no containers/weights/builds — e.g.
+        # blocks/model-store-fsx) has nothing to rehost; the onboarder still emits
+        # graph-air-gapped.yaml so the deployer's single apply path works. Body
+        # equals the input graph, structurally.
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             graph = self._stage(tmp, "mock-graph")
-            (graph / "values.yaml").write_text("images: []\n")
-            with self.assertRaises(SystemExit):
-                co.onboard(graph, tmp, _onboarder(FakeRunner()))
+            (graph / "values.yaml").write_text("images: []\nweights: []\n")
+            original = yaml.safe_load((graph / "graph.yaml").read_text())
+
+            result = co.onboard(graph, tmp, _onboarder(FakeRunner()))
+            self.assertEqual(result.output_basename, "graph-air-gapped.yaml")
+            emitted = yaml.safe_load(result.output_file.read_text())
+            self.assertEqual(emitted, original)
 
 
 class TestHuggingFaceIngest(unittest.TestCase):

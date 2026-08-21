@@ -47,8 +47,8 @@ locals {
   # against this ceiling × 300s to compute a saturation ratio.
   # Formula: (capacity_gib × per_unit_throughput_MBps_per_TiB / 1024_GiB_per_TiB)
   #          × 1024^2 B/MB = capacity_gib × per_unit_throughput × 1024
-  fsx_aggregate_bytes_per_sec        = var.fsx_storage_capacity_gib * local.fsx_per_unit_storage_throughput * 1024
-  fsx_throughput_5min_ceiling_bytes  = local.fsx_aggregate_bytes_per_sec * 300
+  fsx_aggregate_bytes_per_sec       = var.fsx_storage_capacity_gib * local.fsx_per_unit_storage_throughput * 1024
+  fsx_throughput_5min_ceiling_bytes = local.fsx_aggregate_bytes_per_sec * 300
 }
 
 # --- Service-linked role: NOT pre-created here (by design) ---

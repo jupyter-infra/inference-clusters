@@ -758,8 +758,11 @@ class Onboarder:
         image_paths = sidecar.get("images") or []
         weight_paths = sidecar.get("weights") or []
         builds = sidecar.get("builds") or []
-        if not image_paths and not builds:
-            raise SystemExit("[onboard] ERROR: graph values.yaml has no images: or builds: field-paths to rehost")
+
+        # All three lists may be empty — a storage-only block (PV+PVC, no containers,
+        # no weights, no builds; e.g. blocks/model-store-fsx) has nothing to rehost
+        # and just gets its graph.yaml passed through as the emitted air-gapped copy
+        # so the deployer's single apply path still works. NOT an error condition.
 
         if image_paths:
             log(f"rehosting images to {self.ecr}/{self.prefix}/*")

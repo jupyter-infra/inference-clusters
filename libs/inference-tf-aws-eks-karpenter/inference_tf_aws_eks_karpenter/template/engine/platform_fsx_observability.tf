@@ -70,12 +70,12 @@ resource "aws_cloudwatch_metric_alarm" "fsx_events" {
 resource "aws_cloudwatch_metric_alarm" "fsx_free_capacity" {
   count = var.enable_fsx ? 1 : 0
 
-  alarm_name        = "${local.resource_name_prefix}-fsx-low-capacity"
-  alarm_description = "FSx for Lustre FreeStorageCapacity dropped below 20% of provisioned. At 100%-full the FS returns ENOSPC on writes; workloads writing to /models will 500. Increase fsx_storage_capacity_gib or purge stale files."
-  namespace         = "AWS/FSx"
-  metric_name       = "FreeStorageCapacity"
-  statistic         = "Average"
-  period            = 300
+  alarm_name         = "${local.resource_name_prefix}-fsx-low-capacity"
+  alarm_description  = "FSx for Lustre FreeStorageCapacity dropped below 20% of provisioned. At 100%-full the FS returns ENOSPC on writes; workloads writing to /models will 500. Increase fsx_storage_capacity_gib or purge stale files."
+  namespace          = "AWS/FSx"
+  metric_name        = "FreeStorageCapacity"
+  statistic          = "Average"
+  period             = 300
   evaluation_periods = 2 # 10 min sustained
   # Threshold: 20% of provisioned bytes (GiB → bytes → 20%).
   threshold           = var.fsx_storage_capacity_gib * 1024 * 1024 * 1024 * 0.2
@@ -106,8 +106,8 @@ resource "aws_cloudwatch_metric_alarm" "fsx_free_capacity" {
 resource "aws_cloudwatch_metric_alarm" "fsx_read_saturation" {
   count = var.enable_fsx ? 1 : 0
 
-  alarm_name        = "${local.resource_name_prefix}-fsx-read-saturation"
-  alarm_description = "FSx sustained > 70% of read-throughput ceiling for 15 min. Bump fsx_per_unit_storage_throughput to the next tier (250 → 500 → 1000) via terraform apply; the 6h fsx:UpdateFileSystem cooldown then locks the choice for the next six hours."
+  alarm_name          = "${local.resource_name_prefix}-fsx-read-saturation"
+  alarm_description   = "FSx sustained > 70% of read-throughput ceiling for 15 min. Bump fsx_per_unit_storage_throughput to the next tier (250 → 500 → 1000) via terraform apply; the 6h fsx:UpdateFileSystem cooldown then locks the choice for the next six hours."
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 3 # 3 × 5min = 15 min sustained
   threshold           = 0.7
@@ -138,8 +138,8 @@ resource "aws_cloudwatch_metric_alarm" "fsx_read_saturation" {
 resource "aws_cloudwatch_metric_alarm" "fsx_write_saturation" {
   count = var.enable_fsx ? 1 : 0
 
-  alarm_name        = "${local.resource_name_prefix}-fsx-write-saturation"
-  alarm_description = "FSx sustained > 70% of write-throughput ceiling for 15 min. Writes bypass Lustre's client-side page cache (which only helps reads), so sustained write pressure is more likely to hit ceiling than reads. Bump fsx_per_unit_storage_throughput to the next tier via terraform apply; 6h cooldown."
+  alarm_name          = "${local.resource_name_prefix}-fsx-write-saturation"
+  alarm_description   = "FSx sustained > 70% of write-throughput ceiling for 15 min. Writes bypass Lustre's client-side page cache (which only helps reads), so sustained write pressure is more likely to hit ceiling than reads. Bump fsx_per_unit_storage_throughput to the next tier via terraform apply; 6h cooldown."
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 3 # 15 min sustained
   threshold           = 0.7

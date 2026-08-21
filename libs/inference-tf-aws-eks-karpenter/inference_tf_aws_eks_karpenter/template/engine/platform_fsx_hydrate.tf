@@ -164,11 +164,11 @@ resource "kubernetes_job_v1" "fsx_hydrate" {
   }
 
   spec {
-    backoff_limit             = 3
-    active_deadline_seconds   = 7200 # 2h — leaves headroom for a full model refetch
+    backoff_limit              = 3
+    active_deadline_seconds    = 7200  # 2h — leaves headroom for a full model refetch
     ttl_seconds_after_finished = 86400 # 24h — keep for postmortem, then reap
-    completions               = 1
-    parallelism               = 1
+    completions                = 1
+    parallelism                = 1
 
     template {
       metadata {
