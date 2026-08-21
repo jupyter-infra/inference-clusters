@@ -115,8 +115,14 @@ def test_fsx_outputs_and_control_plane(fsx_enabled: EndToEndDeployment) -> None:
     _await_fsx_available(region, fs_id)
     dra = _await_dra_available(region, fs_id)
     assert dra.get("DataRepositoryPath") == f"s3://{model_store}/models/", dra
-    assert dra.get("FileSystemPath") == "/models", (
-        f"DRA FileSystemPath must be /models (the mount root), got {dra.get('FileSystemPath')!r}"
+    # DRA maps Lustre root to the S3 `models/` prefix. The FSx CSI PV mounts
+    # Lustre root at the pod's mountpoint (typically /models), so an S3 object
+    # `models/foo.bin` appears at pod path `/models/foo.bin` — same layout as
+    # the S3-mount PV. Any other value (notably `/models`) double-nests the
+    # imported content and silently no-ops hydration.
+    assert dra.get("FileSystemPath") == "/", (
+        f"DRA FileSystemPath must be / (so Lustre root maps directly to the "
+        f"S3 models/ prefix), got {dra.get('FileSystemPath')!r}"
     )
 
 
