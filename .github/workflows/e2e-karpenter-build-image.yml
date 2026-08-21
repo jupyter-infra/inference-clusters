@@ -26,12 +26,20 @@ jobs:
       id-token: write
       contents: read
     outputs:
-      ecr-tag: ${{ github.sha }}
+      # Tag by the resolved commit actually checked out (inputs.ref when given),
+      # NOT github.sha — on workflow_dispatch github.sha is the dispatch branch,
+      # so it would tag/pull an image built from a different ref than the one
+      # under test. See issue #49.
+      ecr-tag: ${{ steps.resolve-ref.outputs.sha }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+
+      - name: Resolve checked-out commit
+        id: resolve-ref
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Install UV and Python
         uses: ./.github/actions/install-uv
@@ -69,4 +77,4 @@ jobs:
           just ci-e2e-karpenter-build "$ECR_URL:latest"
 
       - name: Push to ECR
-        run: just ci-e2e-karpenter-push ${{ github.sha }} sandbox-ci
+        run: just ci-e2e-karpenter-push ${{ steps.resolve-ref.outputs.sha }} sandbox-ci

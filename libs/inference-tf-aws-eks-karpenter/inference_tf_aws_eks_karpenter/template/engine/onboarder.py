@@ -21,9 +21,14 @@ TWO input formats are supported and auto-detected from the unpacked artifact dir
       lists the field-paths to rehost:
           images:  [ "resources[0].template.spec...containers[0].image", ... ]
           weights: [ "resources[0].template.spec...containers[0].args[0]", ... ]
-      Either list may be empty (e.g. a storage-only block that provisions a PV+PVC
-      pair has neither images nor weights — its graph.yaml is already air-gapped-clean).
-      We read the literal ref at each path, vendor it, and write a REWRITTEN COPY —
+          builds:  [ {path, context, name, tag}, ... ]   # images with NO upstream to import
+      Any list may be empty — a storage-only block (PV+PVC, no containers/weights) has
+      nothing to rehost and its graph.yaml is already air-gapped-clean, so it just gets
+      passed through as the emitted air-gapped copy so the deployer's single apply path
+      still works. We read the literal ref at each `images:` path, vendor it (skopeo copy),
+      and — for each `builds:` entry — BUILD the source dir at `context` into our ECR via
+      the image-build primitive (there is no upstream to skopeo-copy). Both then write a
+      REWRITTEN COPY —
       `graph-air-gapped.yaml` — with our ECR/S3 refs. graph.yaml is left pristine.
       Backstop: field-level — every listed image-path in the emitted graph resolves to
       our ECR `@sha256:`, every weight-path to our S3 (cluster-independent).
@@ -45,6 +50,12 @@ Env (all required unless noted):
   MODELS_S3_URI     s3://<bucket>/models  (weights land under here as <name>/)
   OUT_DIR           where the emitted artifact + result manifest are written
                     (default: $CHART_DIR/..)
+  IMAGE_BUILD_PROJECT       CodeBuild project that BUILDS a source dir into a workload/* ECR
+                    image (the image-build primitive). Required ONLY when a graph values.yaml
+                    declares a `builds:` block (an image with no published upstream to import);
+                    unused otherwise.
+  IMAGE_BUILD_INPUT_S3_URI  s3://<bucket>/image-build/in — where the build-context tarball is
+                    uploaded before the build is triggered. Required with a `builds:` block.
   RESOURCE_TAGS_JSON  JSON map of tags applied to any workload/* ECR repo the job creates
                     (attribution + DeploymentId reaping); optional, default no tags
   SKOPEO_EXTRA      extra skopeo args (tests set --dest-tls-verify=false etc.); optional
@@ -59,6 +70,9 @@ import json
 import os
 import re
 import subprocess
+import tarfile
+import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
@@ -244,6 +258,16 @@ class Runner:
         self.dry_run = dry_run
         self.skopeo_extra = [a for a in skopeo_extra.split() if a]
         self._s3_client: Any = None
+        self._codebuild_client: Any = None
+
+    @property
+    def codebuild_client(self) -> Any:
+        """boto3 CodeBuild client, built lazily (like s3_client) so dry-run and the
+        pure-core unit tests never construct one (and never need AWS creds)."""
+        if self._codebuild_client is None:
+            region = os.environ["AWS_DEFAULT_REGION"]
+            self._codebuild_client = boto3.client("codebuild", region_name=region)
+        return self._codebuild_client
 
     @property
     def s3_client(self) -> Any:
@@ -342,6 +366,61 @@ class Runner:
             capture_output=True,
             text=True,
         )
+
+    def build_image(
+        self, project: str, context_dir: Path, input_uri: str, name: str, tag: str, timeout: int = 1800
+    ) -> None:
+        """Build context_dir into <ecr>/<workload>/<name>:<tag> via the image-build CodeBuild job.
+
+        For an image with NO published upstream to skopeo-copy (built from source, e.g. aiperf):
+        tar the context (Dockerfile at its root) to <input_uri>/<name>/source.tgz, start-build the
+        image-build project with SOURCE_REF/IMAGE_NAME/IMAGE_TAG, and BLOCK until it SUCCEEDS — the
+        caller's digest rewrite needs the push complete. skopeo copy only mirrors EXISTING images,
+        so this is the "build one that doesn't exist yet" path. Raises (fails the onboard) on a
+        missing Dockerfile, an upload/start failure, or a non-SUCCEEDED build, so a broken build
+        never emits a dangling ref."""
+        if self.dry_run:
+            return
+        if not (context_dir / "Dockerfile").is_file():
+            raise SystemExit(f"[onboard] ERROR: build context {context_dir} has no Dockerfile at its root")
+        # Tar the context CONTENTS (Dockerfile at the tarball root — the image-build buildspec
+        # asserts /tmp/src/Dockerfile) and upload it, then trigger + poll the build. All AWS
+        # calls go through boto3 (no aws-CLI shell-out): env values pass as structured fields,
+        # so a name/tag with shell/CLI-special chars can't be misparsed or injected. The temp
+        # tarball is removed with its dir (TemporaryDirectory) whether or not the upload fails.
+        src_bucket, src_prefix = split_s3_uri(input_uri)
+        key = f"{src_prefix + '/' if src_prefix else ''}{name}/source.tgz"
+        with tempfile.TemporaryDirectory(prefix="onboard-build-") as td:
+            tgz = Path(td) / "source.tgz"
+            with tarfile.open(tgz, "w:gz") as tf:
+                tf.add(context_dir, arcname=".")
+            self.s3_client.upload_file(str(tgz), src_bucket, key)
+        source_ref = f"s3://{src_bucket}/{key}"
+
+        build_id = self.codebuild_client.start_build(
+            projectName=project,
+            environmentVariablesOverride=[
+                {"name": "SOURCE_REF", "value": source_ref, "type": "PLAINTEXT"},
+                {"name": "IMAGE_NAME", "value": name, "type": "PLAINTEXT"},
+                {"name": "IMAGE_TAG", "value": tag, "type": "PLAINTEXT"},
+            ],
+        )["build"]["id"]
+        log(f"  build: started {project} build {build_id} for {name}:{tag}")
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            time.sleep(15)
+            try:
+                builds = self.codebuild_client.batch_get_builds(ids=[build_id])["builds"]
+            except ClientError as e:
+                # Tolerate a transient throttle/5xx mid-poll — keep polling until the deadline.
+                log(f"  build: transient error polling {build_id} ({e}); retrying")
+                continue
+            status = builds[0]["buildStatus"] if builds else "IN_PROGRESS"
+            if status == "SUCCEEDED":
+                return
+            if status in ("FAILED", "FAULT", "STOPPED", "TIMED_OUT"):
+                raise SystemExit(f"[onboard] ERROR: image-build {build_id} ended: {status}")
+        raise SystemExit(f"[onboard] ERROR: image-build {build_id} did not finish within {timeout}s")
 
     def ingest_weights(self, source: str, dst_uri: str, name: str) -> None:
         """Rehost a weight source into our S3.
@@ -542,13 +621,28 @@ class Runner:
 
 
 class Onboarder:
-    def __init__(self, *, ecr_registry: str, workload_prefix: str, models_s3_uri: str, runner: Runner) -> None:
+    def __init__(
+        self,
+        *,
+        ecr_registry: str,
+        workload_prefix: str,
+        models_s3_uri: str,
+        runner: Runner,
+        image_build_project: str = "",
+        image_build_input: str = "",
+    ) -> None:
         """Bind the vendor destinations (ECR registry + workload/ repo prefix + models/ S3
-        base) and the Runner seam; both onboard paths rehost through these."""
+        base) and the Runner seam; both onboard paths rehost through these.
+
+        image_build_project / image_build_input are the image-build primitive's coordinates,
+        needed ONLY to satisfy a graph's `builds:` block (an image built from source, no
+        upstream to import); empty when the consumer declares no builds."""
         self.ecr = ecr_registry.rstrip("/")
         self.prefix = workload_prefix.strip("/")
         self.models = models_s3_uri.rstrip("/")
         self.runner = runner
+        self.image_build_project = image_build_project
+        self.image_build_input = image_build_input
 
     # --- shared vendor core ------------------------------------------------
 
@@ -579,6 +673,27 @@ class Onboarder:
         self.runner.ingest_weights(source, dst_uri, name)
         log(f"  weights: {source} -> {dst_uri}")
         return dst_uri
+
+    def _build_image(self, context_dir: Path, name: str, tag: str) -> tuple[str, str]:
+        """Build a source dir into <ecr>/<prefix>/<name> and return (dst_repo, digest).
+
+        The image-build CodeBuild job builds+pushes <ecr>/<prefix>/<name>:<tag> (public egress
+        in CodeBuild, off the air-gapped cluster); we then resolve its digest from OUR registry
+        — reachable on the endpoints-only VPC — so the graph is rewritten to an immutable
+        @sha256 ref, identical to the vendored-image contract. This is the no-upstream-to-import
+        counterpart of _vendor_image. Requires the image-build coordinates (env-supplied)."""
+        if not self.image_build_project or not self.image_build_input:
+            raise SystemExit(
+                "[onboard] ERROR: graph declares a builds: block but IMAGE_BUILD_PROJECT / "
+                "IMAGE_BUILD_INPUT_S3_URI are unset — the cluster's image-build primitive is required."
+            )
+        if not context_dir.is_dir():
+            raise SystemExit(f"[onboard] ERROR: build context dir not found: {context_dir}")
+        self.runner.build_image(self.image_build_project, context_dir, self.image_build_input, name, tag)
+        dst_repo = f"{self.prefix}/{name}"
+        digest = self.runner.resolve_digest(f"{self.ecr}/{dst_repo}:{tag}")
+        log(f"  build: {context_dir} -> {self.ecr}/{dst_repo}@{digest}")
+        return dst_repo, digest
 
     # --- Path A: Helm chart -> overrides.yaml ------------------------------
 
@@ -643,12 +758,15 @@ class Onboarder:
         sidecar = yaml.safe_load((graph_dir / "values.yaml").read_text()) or {}
         image_paths = sidecar.get("images") or []
         weight_paths = sidecar.get("weights") or []
+        builds = sidecar.get("builds") or []
 
-        # Both lists may be empty — a storage-only block (PV+PVC, no containers/weights)
-        # has nothing to rehost and just gets its graph.yaml passed through as the
-        # emitted air-gapped copy so the deployer's single apply path still works.
+        # All three lists may be empty — a storage-only block (PV+PVC, no containers,
+        # no weights, no builds) has nothing to rehost and just gets its graph.yaml
+        # passed through as the emitted air-gapped copy so the deployer's single
+        # apply path still works. NOT an error condition.
 
-        log(f"rehosting images to {self.ecr}/{self.prefix}/*")
+        if image_paths:
+            log(f"rehosting images to {self.ecr}/{self.prefix}/*")
         for path in image_paths:
             tokens = parse_path(path)
             ref = get_path(graph, tokens)
@@ -657,6 +775,26 @@ class Onboarder:
             registry, repository, tag = split_image_ref(ref)
             dst_repo, digest = self._vendor_image(ref, repository, tag)
             set_path(graph, tokens, f"{self.ecr}/{dst_repo}@{digest}")
+
+        if builds:
+            log(f"building images with no upstream to {self.ecr}/{self.prefix}/*")
+            graph_root = graph_dir.resolve()
+            for b in builds:
+                if not isinstance(b, dict):
+                    raise SystemExit(f"[onboard] ERROR: builds entry must be a mapping, got {b!r}")
+                missing = [k for k in ("path", "context", "name", "tag") if k not in b]
+                if missing:
+                    raise SystemExit(f"[onboard] ERROR: builds entry {b!r} missing keys {missing}")
+                # Confine the build context under the artifact dir: a `context` of "/" or
+                # "../.." would otherwise tar + upload + bake arbitrary files readable by the
+                # job into the image. Resolve and require it stays within graph_dir.
+                context_dir = (graph_dir / b["context"]).resolve()
+                if not context_dir.is_relative_to(graph_root):
+                    raise SystemExit(
+                        f"[onboard] ERROR: builds context {b['context']!r} escapes the artifact dir ({context_dir})"
+                    )
+                dst_repo, digest = self._build_image(context_dir, b["name"], str(b["tag"]))
+                set_path(graph, parse_path(b["path"]), f"{self.ecr}/{dst_repo}@{digest}")
 
         if weight_paths:
             log(f"rehosting weights to {self.models}")
@@ -671,8 +809,8 @@ class Onboarder:
                 set_path(graph, tokens, self._vendor_weights(source, name))
 
         # Field-level backstop (cluster-independent): each listed path now resolves to us.
-        log(f"backstop: asserting every listed image-path resolves to {self.ecr}@sha256: and weights to {self.models}")
-        for path in image_paths:
+        log(f"backstop: every image/build path -> {self.ecr}@sha256:, weights -> {self.models}")
+        for path in image_paths + [b["path"] for b in builds]:
             val = get_path(graph, parse_path(path))
             if not (isinstance(val, str) and val.startswith(f"{self.ecr}/") and "@sha256:" in val):
                 raise SystemExit(
@@ -721,6 +859,8 @@ def main() -> None:
         workload_prefix=os.environ.get("WORKLOAD_PREFIX", "workload"),
         models_s3_uri=models,
         runner=runner,
+        image_build_project=os.environ.get("IMAGE_BUILD_PROJECT", ""),
+        image_build_input=os.environ.get("IMAGE_BUILD_INPUT_S3_URI", ""),
     )
     result = onboard(chart_dir, out_dir, onboarder)
     # Hand the buildspec what to publish, mode-agnostically (post_build sources this).

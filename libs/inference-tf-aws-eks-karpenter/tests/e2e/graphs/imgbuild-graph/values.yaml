@@ -1,0 +1,12 @@
+# Path-B onboard sidecar for the `builds:` capability.
+#
+# No images: to skopeo-copy (the one image has no published upstream). Instead a builds:
+# entry tells the onboarder to BUILD the source dir at `context` (Dockerfile at its root)
+# via the image-build job and rewrite the graph field-path to our ECR copy @digest.
+# onboard_graph() tars the whole fixture dir, so build-ctx/ ships in the artifact.
+images: []
+builds:
+  - path: spec.resources[0].template.spec.template.spec.containers[0].image
+    context: build-ctx
+    name: imgbuild-graph-app
+    tag: v1

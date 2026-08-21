@@ -97,6 +97,15 @@ data "aws_iam_policy_document" "onboarder_extra" {
     actions   = ["s3:PutObject", "s3:AbortMultipartUpload"]
     resources = ["${module.model_store.bucket_arn}/*"]
   }
+  # Trigger + poll the image-build job for a graph's `builds:` block (an image with no
+  # upstream to skopeo-copy). Uploading the build context uses the WriteSharedBucket grant
+  # above (image-build/in/* is under the shared bucket). Scoped to the one project ARN.
+  statement {
+    sid       = "TriggerImageBuild"
+    effect    = "Allow"
+    actions   = ["codebuild:StartBuild", "codebuild:BatchGetBuilds"]
+    resources = ["arn:${data.aws_partition.current.partition}:codebuild:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:project/${module.image_build.project_name}"]
+  }
 }
 
 locals {
@@ -144,6 +153,13 @@ module "onboarder" {
     # format is auto-detected from the unpacked dir; default keeps the project valid
     # standalone. (CHART_REF is kept as the name for backward compatibility.)
     CHART_REF = "unset"
+    # Coordinates of the image-build primitive (platform_image_build.tf). A graph's
+    # `builds:` block is satisfied by BUILDING an image with no published upstream (vs
+    # skopeo-copying an existing one): the onboarder tars the build context to
+    # IMAGE_BUILD_INPUT_S3_URI and start-builds IMAGE_BUILD_PROJECT. Used only when a
+    # builds: block is present; harmless otherwise.
+    IMAGE_BUILD_PROJECT      = module.image_build.project_name
+    IMAGE_BUILD_INPUT_S3_URI = local.image_build_in_s3_uri
   }
 
   # CodeBuild runs each command under /bin/sh (dash): no `set -o pipefail`. The onboard
