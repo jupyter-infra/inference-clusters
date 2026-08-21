@@ -221,28 +221,111 @@ resource "aws_iam_role_policy" "s3_csi" {
 
 # --- StorageClasses + S3 mount PV/PVC (charts/storage) ---
 #
-# First-party local chart: the EBS gp3 default class (RWO, dynamic) + the s3-models
-# static PV/PVC (Mountpoint supports STATIC provisioning only). One helm_release so
+# First-party local chart: the EBS gp3 default class (RWO, dynamic), the s3-models
+# static PV/PVC (Mountpoint supports STATIC provisioning only), and — when
+# var.enable_fsx is true — the FSx for Lustre static PV/PVC. One helm_release so
 # the objects install/uninstall atomically and teardown-order cleanly before the CSI
-# drivers (via depends_on cluster_addons). FSx RWX class is added here later.
+# drivers (via depends_on cluster_addons + helm_release.fsx_csi_driver).
+locals {
+  # S3-mount mount path inside consumer pods. The chart doesn't own the mountPath
+  # (Mountpoint's client is pointed at whatever the pod's volumeMounts.mountPath is),
+  # so this is the CONVENTION the platform publishes for tracks to follow. Matches
+  # the FSx mount path so a track that flips between backends doesn't have to change
+  # its container's volume mount path.
+  s3_mount_path = "/models"
+
+  # PVC name + namespace the storage chart materializes for S3-mount. The
+  # s3_mount_platform_info ConfigMap advertises these so tracks discover them
+  # rather than hardcoding. Namespace matches the FSx PVC's (workload namespace,
+  # via s3.claimNamespace on helm_release.storage below) so PVC consumers use one
+  # place for both backends.
+  s3_mount_pvc_name = "model-store"
+}
+
 resource "helm_release" "storage" {
   name      = "storage"
   chart     = "${path.module}/../charts/storage"
   namespace = "kube-system"
 
-  set = [
-    { name = "ebs.default", value = "true" },
-    { name = "s3.bucketName", value = module.model_store.bucket_name },
-    { name = "s3.region", value = data.aws_region.current.id },
-    { name = "s3.modelsPrefix", value = local.model_store_models_prefix },
-    { name = "s3.claimNamespace", value = kubernetes_namespace_v1.workload.metadata[0].name },
-    # Chart content hash so editing a chart file triggers a re-apply (see main.tf).
-    { name = "chartContentHash", value = local.chart_hashes["storage"] },
-  ]
+  set = concat(
+    [
+      { name = "ebs.default", value = "true" },
+      { name = "s3.bucketName", value = module.model_store.bucket_name },
+      { name = "s3.region", value = data.aws_region.current.id },
+      { name = "s3.modelsPrefix", value = local.model_store_models_prefix },
+      { name = "s3.claimNamespace", value = kubernetes_namespace_v1.workload.metadata[0].name },
+      # Chart content hash so editing a chart file triggers a re-apply (see main.tf).
+      { name = "chartContentHash", value = local.chart_hashes["storage"] },
+      { name = "fsx.enabled", value = tostring(var.enable_fsx) },
+    ],
+    # FSx values populated only when the file system exists; otherwise fsx.enabled=false
+    # short-circuits the chart's fsx-mount.yaml template.
+    var.enable_fsx ? [
+      { name = "fsx.fileSystemId", value = aws_fsx_lustre_file_system.shared[0].id },
+      { name = "fsx.dnsName", value = aws_fsx_lustre_file_system.shared[0].dns_name },
+      { name = "fsx.mountName", value = aws_fsx_lustre_file_system.shared[0].mount_name },
+      # AZ hint embedded on the PV as spec.nodeAffinity — see charts/storage/templates/fsx-mount.yaml.
+      { name = "fsx.availabilityZone", value = data.aws_subnet.fsx[0].availability_zone },
+      { name = "fsx.capacity", value = "${var.fsx_storage_capacity_gib}Gi" },
+      { name = "fsx.claimNamespace", value = kubernetes_namespace_v1.workload.metadata[0].name },
+    ] : [],
+  )
 
   depends_on = [
     null_resource.cluster_addons,
     aws_eks_addon.s3_csi_driver,
     module.node_group,
+    helm_release.fsx_csi_driver,
+    aws_fsx_data_repository_association.models,
+  ]
+}
+
+# --- s3-mount-platform-info ConfigMap: peer discovery handle for S3-mount ---
+#
+# Symmetric with fsx-platform-info (platform_fsx.tf). Publishes S3-mount identity as
+# a first-class K8s object so tracks discover storage backends by listing
+# `-l platform.inference/kind=storage` — one code path across FSx and S3-mount rather
+# than "check-for-ConfigMap else hardcode-defaults." Unconditional (S3-mount is
+# always on, unlike FSx which is opt-in).
+#
+# `capabilities` is the load-bearing field for backend selection:
+#   - "read-only, partial-posix" — surfaces the honest constraints (Mountpoint
+#     doesn't support atomic renames, POSIX locking, or writes to existing keys).
+#     A track that needs RWX/POSIX rejects this backend on read.
+#
+# platformPvcNamespace advertises the workload namespace, matching where both
+# the S3-mount PVC (via s3.claimNamespace) and the FSx PVC land — so consumers
+# use one namespace for both backends.
+resource "kubernetes_config_map_v1" "s3_mount_platform_info" {
+  metadata {
+    name      = "s3-mount-platform-info"
+    namespace = kubernetes_namespace_v1.workload.metadata[0].name
+    labels = {
+      "platform.inference/kind"    = "storage"
+      "platform.inference/backend" = "s3-mount"
+    }
+    annotations = {
+      "platform.inference/deployment-id" = random_id.postfix.hex
+    }
+  }
+
+  data = {
+    bucketName           = module.model_store.bucket_name
+    region               = data.aws_region.current.id
+    modelsPrefix         = local.model_store_models_prefix
+    mountPath            = local.s3_mount_path
+    dataRepositoryPath   = "s3://${module.model_store.bucket_name}/${local.model_store_models_prefix}/"
+    platformPvcName      = local.s3_mount_pvc_name
+    platformPvcNamespace = kubernetes_namespace_v1.workload.metadata[0].name
+    # Honest labeling: Mountpoint mounts are ReadOnlyMany + partial POSIX. Tracks
+    # that need RWX or full POSIX (locking, atomic rename) reject this backend on
+    # read and fall through to FSx (or fail loud when FSx isn't enabled).
+    capabilities = "read-only, partial-posix"
+  }
+
+  depends_on = [
+    null_resource.cluster_addons,
+    module.node_group,
+    helm_release.storage,
   ]
 }

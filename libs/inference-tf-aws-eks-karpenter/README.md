@@ -104,6 +104,9 @@ This project:
   **LeaderWorkerSet** (multi-node serving)
 - installs the **Mountpoint-S3 CSI driver** and creates a **model-store S3 bucket** for
   serving weights, plus a CodeBuild-based onboarder for staging models/images into ECR
+- optionally enables **FSx for Lustre** (PERSISTENT_2 SSD + LZ4) as an RWX shared file
+  system fronting the same S3 model store via a Data Repository Association, exposed to
+  workloads as a static PV/PVC through the `aws-fsx-csi-driver`
 - optionally enables a **Gateway API inference-routing** path (InferencePool CRDs + endpoint
   picker)
 - embeds a `random_id` postfix in resource names and tags so two deployments can coexist in
@@ -134,6 +137,7 @@ project for descriptions and recommended values. Grouped by concern:
 | Autoscaling operators | `keda_chart_version`, `kro_chart_version` |
 | Batch / multi-node | `enable_lws`, `lws_chart_version`, `enable_kueue`, `kueue_chart_version`, `kueue_cluster_queue_name`, `gpu_g_capacity`, `gpu_p_capacity`, `kueue_gpu_lending_limit`, `enable_efa`, `efa_device_plugin_chart_version`, `efa_device_plugin_image_tag` |
 | Storage / images | `mountpoint_s3_csi_version`, `common_images`, `workload_namespace` |
+| FSx for Lustre (opt-in) | `enable_fsx`, `fsx_storage_capacity_gib`, `fsx_per_unit_storage_throughput`, `fsx_imported_file_chunk_size_mib`, `fsx_kms_key_arn`, `fsx_csi_driver_chart_version`, `fsx_hydrate_prefixes` |
 | Inference routing | `enable_inference_routing` |
 
 ## Outputs
@@ -163,6 +167,11 @@ project for descriptions and recommended values. Grouped by concern:
 | `vendored_image_tag` | Tag applied to vendored images |
 | `starter_rgd_names` | KRO ResourceGraphDefinition starter names |
 | `*_namespace` | Namespaces for the installed platform components |
+| `fsx_enabled` | Whether the FSx for Lustre file system is provisioned |
+| `fsx_file_system_id` / `fsx_file_system_arn` | ID + ARN of the shared FSx for Lustre file system (empty when disabled) |
+| `fsx_dns_name` / `fsx_mount_name` | DNS + Lustre mount name — the two pieces of a CSI volumeHandle (empty when disabled) |
+| `fsx_availability_zone` | AZ the FSx file system lives in — pin FSx-consumer pods here (empty when disabled) |
+| `fsx_data_repository_path` | S3 URI the FSx `/models` mount is linked to via the DRA (empty when disabled) |
 
 Run `jd show --outputs --list` for the complete list.
 

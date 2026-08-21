@@ -1,0 +1,70 @@
+{{- /*
+FSx for Lustre static PV/PVC. The FSx CSI driver supports both dynamic and static
+provisioning; static is the shape a Terraform-managed FS uses. `volumeHandle` for
+FSx is "<fs-id>::<mount-name>" (unlike EBS/EFS where it's just the ID); the
+`dnsname` + `mountname` volumeAttributes must match.
+
+`flock` in mountOptions enables POSIX file locking (SafeTensors mmap, sqlite,
+torch DataLoader with pinned workers, apt/pip caches — all break subtly without
+it). `noatime` is a small perf win (skips atime updates). `_netdev` tags the
+mount as network-backed for systemd.
+
+RWX by design — matches the intended workload set (LoRA/checkpoint scratch,
+shared dataset caches, KV-cache offload). The DRA's `auto_export_policy = []`
+means pod-side writes to /models stay on the Lustre FS and NEVER propagate back
+to the S3 model store — S3 remains the durable source of truth, Lustre is a hot
+cache + scratch. A reader-only pod should set `readOnly: true` on its
+volumeMount (defense-in-depth); the PVC itself is not the enforcement seam.
+Gated by Terraform (set fsx.enabled from platform_storage.tf when var.enable_fsx
+is true).
+*/ -}}
+{{- if .Values.fsx.enabled }}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Values.fsx.claimName }}
+spec:
+  capacity:
+    storage: {{ .Values.fsx.capacity }}
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  persistentVolumeReclaimPolicy: Retain
+  mountOptions:
+    - flock
+    - noatime
+    - _netdev
+  # AZ pin — FSx for Lustre is single-AZ (subnet_ids has exactly one). Any pod on a
+  # different-AZ node pays inter-AZ transfer + higher latency on every read/write.
+  # Embedding topology.kubernetes.io/zone here makes kube-scheduler refuse to bind a
+  # PVC-consuming pod on the wrong-AZ node, so Karpenter provisions in the FSx AZ.
+  # Operator-transparent — track owners don't need to remember to pin their pods.
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: topology.kubernetes.io/zone
+              operator: In
+              values:
+                - {{ .Values.fsx.availabilityZone | quote }}
+  csi:
+    driver: fsx.csi.aws.com
+    volumeHandle: {{ .Values.fsx.fileSystemId }}::{{ .Values.fsx.mountName }}
+    volumeAttributes:
+      dnsname: {{ .Values.fsx.dnsName | quote }}
+      mountname: {{ .Values.fsx.mountName | quote }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.fsx.claimName }}
+  namespace: {{ .Values.fsx.claimNamespace }}
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: {{ .Values.fsx.capacity }}
+  volumeName: {{ .Values.fsx.claimName }}
+{{- end }}

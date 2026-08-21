@@ -320,8 +320,10 @@ update-inference-extension-crds version=inference-extension-crd-version:
 # pytest-jupyter-deploy package. Config-only tests need no AWS; full-deployment
 # tests (full-deploy=true) provision a real cluster and require AWS credentials.
 
-# Detect container tool (finch or docker)
-container-tool := `command -v finch >/dev/null 2>&1 && echo "finch" || echo "docker"`
+# Detect container tool (finch or docker). Prefer finch when it actually works
+# (e.g. `finch info` succeeds); fall back to docker otherwise — a broken finch install
+# on the host would otherwise poison every nested `just` call in the e2e workflow.
+container-tool := `command -v finch >/dev/null 2>&1 && finch info >/dev/null 2>&1 && echo "finch" || echo "docker"`
 
 # Host user UID/GID for running containers with correct permissions
 export HOST_UID := `id -u`

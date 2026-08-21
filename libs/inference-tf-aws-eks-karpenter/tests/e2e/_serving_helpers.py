@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 import boto3
+from mypy_boto3_fsx.client import FSxClient
 from mypy_boto3_s3.client import S3Client
 from pytest_jupyter_deploy.deployment import EndToEndDeployment
 from pytest_jupyter_deploy.kubernetes import nodes
@@ -99,6 +100,12 @@ def workload_image_repo(e2e: EndToEndDeployment, image_suffix: str = WORKLOAD_IM
 def _s3_client() -> S3Client:
     """boto3 S3 client for host-side test setup and cleanup, built once per test session."""
     return boto3.client("s3")
+
+
+@functools.cache
+def fsx_client(region: str) -> FSxClient:
+    """boto3 FSx client for host-side test polls (region-pinned), one per session per region."""
+    return boto3.client("fsx", region_name=region)
 
 
 def s3_put_object(bucket: str, key: str, body: bytes) -> None:

@@ -89,5 +89,17 @@ enable_efa                      = false
 efa_device_plugin_chart_version = "v0.5.30"
 efa_device_plugin_image_tag     = "v0.5.20" # chart v0.5.30 appVersion; vendored into ECR
 
+# --- FSx for Lustre (opt-in, off by default) ---
+# PERSISTENT_2 SSD + DRA to s3://<model_store>/models/. Cost floor is non-trivial
+# (~$700/mo at 4800 GiB × 250 MB/s/TiB in us-west-2), so this pool is off unless a
+# workload explicitly asks for RWX POSIX with sub-ms metadata. The file system is
+# single-AZ; pin FSx-consumer pods to the first private subnet's AZ (nodeAffinity).
+enable_fsx                       = false
+fsx_storage_capacity_gib         = 4800
+fsx_per_unit_storage_throughput  = 0 # 0 = auto-derive from enable_gpu_p_nodepool (500 if P on, 250 otherwise); override with 125/250/500/1000 to pin
+fsx_imported_file_chunk_size_mib = 16
+fsx_kms_key_arn                  = ""
+fsx_csi_driver_chart_version     = "1.17.0"
+fsx_hydrate_prefixes             = []
 # --- GPU node image-pull acceleration (SOCI snapshotter parallel pull/unpack) ---
 gpu_parallel_image_pull = true

@@ -517,6 +517,124 @@ variable "efa_device_plugin_image_tag" {
   type        = string
 }
 
+# === FSx for Lustre (opt-in) ===
+
+variable "enable_fsx" {
+  description = <<-EOT
+    Install the FSx for Lustre RWX shared file system (weight cache + shared scratch).
+
+    Opt-in: adds a PERSISTENT_2 SSD file system in the first private subnet, a Data
+    Repository Association to the model store bucket's models/ prefix, the aws-fsx-csi-driver
+    Helm release, and a static PV/PVC exposing /models over Lustre. Off by default because
+    an FSx file system has a non-trivial hourly cost floor and is single-AZ.
+
+    Recommended: false
+  EOT
+  type        = bool
+}
+
+variable "fsx_storage_capacity_gib" {
+  description = <<-EOT
+    FSx for Lustre storage capacity in GiB.
+
+    PERSISTENT_2 SSD requires multiples of 1200. Storage size and per-unit throughput
+    together set aggregate throughput (capacity_gib × per_unit_throughput / 1024).
+
+    Recommended: 4800
+  EOT
+  type        = number
+}
+
+variable "fsx_per_unit_storage_throughput" {
+  description = <<-EOT
+    FSx for Lustre per-unit throughput in MB/s per TiB (PERSISTENT_2 SSD).
+
+    Sentinel 0 (the preset default) auto-derives from total GPU capacity plus
+    the P-pool flag — cold-scale-out (many pods starting at once) is the real
+    saturation risk, and Lustre's per-node cache doesn't help first-touch reads:
+
+      ≤ 20 GPUs (or P off)          : 250 MB/s/TiB (~$700/mo,  ~1.17 GB/s agg)
+      20 < N ≤ 60 GPUs (P on)       : 500 MB/s/TiB (~$1,400/mo, ~2.34 GB/s)
+      > 60 GPUs (P-heavy)           : 1000 MB/s/TiB (~$2,800/mo, ~4.68 GB/s)
+
+    Override with an explicit 125 / 250 / 500 / 1000 to pin. In-place updatable
+    via fsx:UpdateFileSystem with a 6-hour cooldown between changes — a bad
+    first choice is recoverable, not a rebuild. Saturation alarms fire at 70%
+    of ceiling; see FSX_TUNING.md for the manual bump playbook.
+
+    Recommended: 0 (auto)
+  EOT
+  type        = number
+}
+
+variable "fsx_imported_file_chunk_size_mib" {
+  description = <<-EOT
+    FSx DRA: metadata-import stripe granularity in MiB per S3-object → OST placement.
+
+    Controls how large a single S3 object must be before it strides across
+    multiple Lustre OSTs at import time. AWS recommends 16 MiB for large tensor
+    files (safetensors, .bin shards) so a single weight file reads in parallel
+    from all OSTs; 1024 MiB (the AWS default) leaves every file < 1 GiB on a
+    single OSS and caps its read throughput at one server's tier. Tune UP for
+    many-small-files workloads (tokenizer configs, adapter shards) where
+    per-file metadata overhead dominates.
+
+    Recommended: 16
+  EOT
+  type        = number
+}
+
+variable "fsx_kms_key_arn" {
+  description = <<-EOT
+    Customer-managed KMS key ARN for FSx encryption at rest.
+
+    FSx enforces encryption at rest always; this variable only selects which key.
+    Empty string (the default) means the AWS-managed aws/fsx key — zero cost, no
+    customer control over rotation or cross-account grants. Setting a KMS ARN
+    switches to that customer-managed key (rotation control, key-policy audit,
+    cross-service auth via `kms:ViaService = fsx.<region>.amazonaws.com`).
+    The template does not auto-create a CMK; if you want one, pre-create it and
+    pass its ARN here.
+
+    Recommended: ""
+  EOT
+  type        = string
+}
+
+variable "fsx_csi_driver_chart_version" {
+  description = <<-EOT
+    Helm chart version for the aws-fsx-csi-driver.
+
+    Sourced from https://kubernetes-sigs.github.io/aws-fsx-csi-driver.
+
+    Recommended: 1.17.0
+  EOT
+  type        = string
+}
+
+variable "fsx_hydrate_prefixes" {
+  description = <<-EOT
+    S3-subpath list to bulk-warm from S3 into Lustre disk at deploy time.
+
+    FSx DRA imports S3 object METADATA (namespace) at creation, but file BYTES are
+    lazy-loaded on first read — the first pod eats the S3-to-Lustre download tax
+    per file, killing deterministic cold-start. Setting a prefix here launches a
+    platform-owned Kubernetes Job that pre-fetches every file under the prefix via
+    `find | xargs -P 32 lfs hsm_restore`, then stripes the tree with `lfs setstripe
+    -c -1 -S 4M` for parallel-read on all OSTs, then writes a `.hydrated-<slug>`
+    sentinel that workload initContainers can gate on.
+
+    Paths are RELATIVE to the FSx mount root /models — e.g. ["qwen2.5-7b",
+    "llama-3-70b"] hydrates s3://<model-store>/models/qwen2.5-7b/ and .../llama-3-70b/.
+
+    Empty list = skip hydration entirely (still opt-in inside enable_fsx=true).
+    Prefixes must be non-empty subpaths — hydrating the whole "/models" tree in
+    one Job over-fetches every model the onboarder ever pushed.
+
+    Recommended: []
+  EOT
+  type        = list(string)
+}
 variable "gpu_parallel_image_pull" {
   description = <<-EOT
     Whether to enable the SOCI snapshotter (parallel pull/unpack) on GPU nodes.

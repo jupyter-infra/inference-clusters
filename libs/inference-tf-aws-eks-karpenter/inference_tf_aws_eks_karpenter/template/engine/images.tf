@@ -286,17 +286,27 @@ module "image_vendor" {
   # each command under /bin/sh (dash): plain pipes work, but `set -o pipefail` is
   # illegal — so we simply don't use it. A non-zero exit fails the build.
   #
+  # Skopeo is installed from the Kubic OBS repo (matches the onboarder buildspec —
+  # see onboarder.tf commit d349c8a) rather than Ubuntu's packaged 1.4.1, which has
+  # a blob-existence-check auth bug: `skopeo copy` succeeds `skopeo login` for the
+  # destination ECR, but the internal HEAD to check whether a blob already exists
+  # at the destination fails with `unauthorized: authentication required` — kills
+  # every vendor build against a multi-arch source (grafana, nvidia device plugin,
+  # keda, dcgm-exporter, ...). Kubic ships >=1.15 which uses a shared auth store.
+  #
   # NO `--all`: it copies the whole manifest list including SBOM/attestation layers
-  # (application/vnd.in-toto+json), which the packaged skopeo (1.4.1) can't handle —
-  # DCGM's image carries one and `--all` fails "unsupported MIME type" (verified live).
-  # Omitting it copies the CodeBuild host's platform (linux/amd64), which is all
-  # our x86_64 nodes need.
+  # (application/vnd.in-toto+json). Omitting it copies the CodeBuild host's
+  # platform (linux/amd64), which is all our x86_64 nodes need.
   buildspec = <<-YAML
     version: 0.2
     phases:
       pre_build:
         commands:
-          - command -v skopeo >/dev/null 2>&1 || (apt-get update -y && apt-get install -y skopeo)
+          - |
+            . /etc/os-release
+            echo "deb https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/unstable/xUbuntu_$${VERSION_ID}/ /" > /etc/apt/sources.list.d/skopeo.list
+            curl -fsSL "https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/unstable/xUbuntu_$${VERSION_ID}/Release.key" | gpg --dearmor -o /etc/apt/trusted.gpg.d/skopeo.gpg
+            apt-get update -y && apt-get install -y skopeo
           - ECR_PASSWORD=$(aws ecr get-login-password --region $AWS_DEFAULT_REGION)
           - echo "$ECR_PASSWORD" | skopeo login --username AWS --password-stdin $ECR_REGISTRY
           # If the SOURCE is an ECR registry (e.g. the EKS-managed regional ECR the
