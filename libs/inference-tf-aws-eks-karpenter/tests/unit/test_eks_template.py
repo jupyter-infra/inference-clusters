@@ -1165,11 +1165,18 @@ def test_fsx_observability_alarms_and_grafana_ds() -> None:
     # Log-metric filter wired.
     lmf = _resource(content, "aws_cloudwatch_log_metric_filter", "fsx_events")
     assert "aws_cloudwatch_log_group.fsx[0].name" in lmf, "log-metric-filter must target the FSx event log group"
-    # Grafana CW IAM is scoped to AWS/FSx via a cloudwatch:namespace condition.
+    # Grafana CW IAM: action-scoped only. cloudwatch:namespace is NOT a valid
+    # condition key for GetMetricData/ListMetrics/GetMetricStatistics per the
+    # CloudWatch Service Authorization Reference — only PutMetricData supports
+    # it. Namespace-restriction is enforced by the datasource's
+    # customMetricsNamespaces config, not IAM.
     doc = _extract_block(content, "data", "aws_iam_policy_document", "grafana_cloudwatch")
-    assert "cloudwatch:namespace" in doc and '"AWS/FSx"' in doc, (
-        "Grafana CloudWatch GetMetricData must be namespace-scoped to AWS/FSx (IAM condition)"
+    assert "cloudwatch:namespace" not in doc, (
+        "Grafana CloudWatch policy must NOT set cloudwatch:namespace condition — it's not "
+        "a valid condition key for read actions and every request would silently AccessDenied"
     )
+    assert "cloudwatch:GetMetricData" in doc, "policy must grant GetMetricData"
+    assert "cloudwatch:ListMetrics" in doc, "policy must grant ListMetrics (Grafana discovery)"
     # Datasource ConfigMap has the grafana_datasource label the chart's sidecar watches.
     cm = _resource(content, "kubernetes_config_map_v1", "grafana_fsx_datasource")
     assert 'grafana_datasource = "1"' in cm, (

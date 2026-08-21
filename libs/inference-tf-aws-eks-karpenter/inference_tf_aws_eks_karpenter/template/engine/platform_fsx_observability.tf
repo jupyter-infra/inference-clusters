@@ -21,6 +21,13 @@
 # CloudWatch alarms can't fire directly on a log stream — the pattern is: filter
 # → metric → alarm. Emits FsxEventCount incremented by 1 for each line matching
 # WARN|ERROR|FAILED. Alarm on sum > 0 over 5 min (any hit in the window pages).
+#
+# Per-deployment isolation is baked into the METRIC NAME (not dimensions).
+# CloudWatch Logs' PutMetricFilter rejects `dimensions` on a keyword-match
+# pattern ("The specified filter pattern does not support dimensions") because
+# dimensions require the filter to extract named fields from log events.
+# Embedding deployment_id in the metric name gives the same per-deployment
+# alarm isolation without the extraction complexity.
 resource "aws_cloudwatch_log_metric_filter" "fsx_events" {
   count = var.enable_fsx ? 1 : 0
 
@@ -30,19 +37,11 @@ resource "aws_cloudwatch_log_metric_filter" "fsx_events" {
   pattern = "?WARN ?ERROR ?FAILED"
 
   metric_transformation {
-    name      = "FsxEventCount"
+    # Deployment_id in the metric name — see block comment above for why.
+    name      = "FsxEventCount-${random_id.postfix.hex}"
     namespace = "InferenceCluster/FSx"
     value     = "1"
     unit      = "Count"
-    # `default_value` and `dimensions` are mutually exclusive on the CloudWatch
-    # Logs PutMetricFilter API — setting both returns InvalidParameterException.
-    # We keep dimensions (DeploymentId lets multi-deployment accounts distinguish
-    # events per FS) and drop default_value; the alarm below sets
-    # treat_missing_data = "notBreaching", so absence-of-data already means
-    # "don't page." The default_value would have been redundant with that.
-    dimensions = {
-      DeploymentId = random_id.postfix.hex
-    }
   }
 }
 
@@ -52,17 +51,13 @@ resource "aws_cloudwatch_metric_alarm" "fsx_events" {
   alarm_name          = "${local.resource_name_prefix}-fsx-events"
   alarm_description   = "FSx for Lustre emitted a WARN/ERROR/FAILED event in the last 5 minutes. Check /aws/fsx/${local.resource_name_prefix} log group for the DRA / service-side detail."
   namespace           = "InferenceCluster/FSx"
-  metric_name         = "FsxEventCount"
+  metric_name         = "FsxEventCount-${random_id.postfix.hex}"
   statistic           = "Sum"
   period              = 300
   evaluation_periods  = 1
   threshold           = 0
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
-
-  dimensions = {
-    DeploymentId = random_id.postfix.hex
-  }
 
   tags = local.combined_tags
 }
@@ -180,31 +175,24 @@ resource "aws_cloudwatch_metric_alarm" "fsx_write_saturation" {
 # at the deployment's region. Reuses the already-provisioned `monitoring` VPC
 # interface endpoint — no NAT, no public egress needed.
 #
-# Scoped to AWS/FSx namespace via IAM condition `cloudwatch:namespace = AWS/FSx`.
-# ListMetrics doesn't support that condition per AWS docs, so ListMetrics is
-# broader (all namespaces); GetMetricData IS scoped and is the sensitive one.
+# Action-scoped policy: CloudWatch read APIs Grafana needs (GetMetricData +
+# discovery). `cloudwatch:namespace` is NOT a valid condition key for these
+# read actions per the CloudWatch Service Authorization Reference — only
+# PutMetricData supports it. A previous attempt scoped GetMetricData to
+# `cloudwatch:namespace = "AWS/FSx"`; the condition would never match, IAM
+# would deny every request, and the Grafana panels would silently render
+# empty (invisible to CI, only caught by looking at Grafana at runtime).
+# Scope is achieved via the datasource's `customMetricsNamespaces` config
+# (see kubernetes_config_map_v1.grafana_fsx_datasource below), which the
+# Grafana query client uses to restrict its `Namespace` param on each call.
 data "aws_iam_policy_document" "grafana_cloudwatch" {
   count = var.enable_fsx ? 1 : 0
 
-  # GetMetricData — sensitive read. Scoped to AWS/FSx.
   statement {
-    sid       = "GetMetricDataFsxOnly"
-    effect    = "Allow"
-    actions   = ["cloudwatch:GetMetricData"]
-    resources = ["*"]
-    condition {
-      test     = "StringEquals"
-      variable = "cloudwatch:namespace"
-      values   = ["AWS/FSx"]
-    }
-  }
-  # ListMetrics + GetMetricStatistics + tag reads — required by Grafana's
-  # discovery pass. AWS doesn't support namespace-scoping these actions, so the
-  # allow-list is action-only.
-  statement {
-    sid    = "GrafanaCloudWatchDiscovery"
+    sid    = "GrafanaCloudWatchReads"
     effect = "Allow"
     actions = [
+      "cloudwatch:GetMetricData",
       "cloudwatch:ListMetrics",
       "cloudwatch:GetMetricStatistics",
       "cloudwatch:DescribeAlarmsForMetric",
