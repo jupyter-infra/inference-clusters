@@ -442,6 +442,13 @@ def test_batch_buckets_expire_current_and_noncurrent_objects() -> None:
     assert re.search(r'values\s+= \["false"\]', module_main)
 
 
+def test_model_store_claim_uses_the_workload_namespace() -> None:
+    """The model-store claim must exist in the namespace that runs inference pods."""
+    storage = _resource((ENGINE / "platform_storage.tf").read_text(), "helm_release", "storage")
+    expected = 'name = "s3.claimNamespace", value = kubernetes_namespace_v1.workload.metadata[0].name'
+    assert expected in storage, "the storage release must put the model-store claim in the workload namespace"
+
+
 def test_onboarder_iam_scopes_workload_ecr_and_bucket() -> None:
     """The onboard job's IAM grants create+push on workload/* and WRITE the shared bucket only (no `*`)."""
     content = (ENGINE / "onboarder.tf").read_text()

@@ -7,12 +7,12 @@
 # gauge drops to 0 -> KEDA scales vLLM back to 0.
 #
 # threshold=1 + activationThreshold=0: 0 in-flight -> scale to 0; >=1 -> activate + up.
-# ${target} is the vLLM Deployment name (substituted at apply time).
+# ${target} (the vLLM Deployment name) and ${namespace} are substituted at apply time.
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
   name: ${target}
-  namespace: default
+  namespace: ${namespace}
 spec:
   scaleTargetRef:
     name: ${target}

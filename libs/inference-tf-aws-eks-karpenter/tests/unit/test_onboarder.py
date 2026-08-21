@@ -243,20 +243,51 @@ class TestPathBGraph(unittest.TestCase):
                 # NOT the source's last segment — so the workload read-path matches.
                 self.assertEqual(val, f"{MODELS}/{name}")
 
-    def test_graph_without_image_or_weight_paths_emits_pristine_air_gapped(self) -> None:
-        # A storage-only block (PV+PVC, no containers/weights) has nothing to rehost;
-        # the onboarder still emits graph-air-gapped.yaml so the deployer's single
-        # apply path works. Body equals the input graph, structurally.
+    def test_graph_forwards_a_hugging_face_revision(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             graph = self._stage(tmp, "mock-graph")
-            (graph / "values.yaml").write_text("images: []\nweights: []\n")
-            original = yaml.safe_load((graph / "graph.yaml").read_text())
+            document = yaml.safe_load((graph / "graph.yaml").read_text())
+            source = "hf://owner/model@abc123"
+            document["spec"]["resources"][0]["template"]["spec"]["template"]["spec"]["containers"][0]["env"][0][
+                "value"
+            ] = source
+            (graph / "graph.yaml").write_text(yaml.safe_dump(document, sort_keys=False))
+            runner = FakeRunner()
+            co.onboard(graph, tmp, _onboarder(runner))
+            self.assertEqual(runner.ingested, [(source, f"{MODELS}/mock-tiny")])
 
-            result = co.onboard(graph, tmp, _onboarder(FakeRunner()))
-            self.assertEqual(result.output_basename, "graph-air-gapped.yaml")
-            emitted = yaml.safe_load(result.output_file.read_text())
-            self.assertEqual(emitted, original)
+    def test_graph_without_image_paths_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            graph = self._stage(tmp, "mock-graph")
+            (graph / "values.yaml").write_text("images: []\n")
+            with self.assertRaises(SystemExit):
+                co.onboard(graph, tmp, _onboarder(FakeRunner()))
+
+
+class TestHuggingFaceIngest(unittest.TestCase):
+    @patch.object(co.subprocess, "run")
+    @patch.object(co, "snapshot_download")
+    def test_revision_is_forwarded(self, download: Any, run: Any) -> None:
+        runner = co.Runner()
+        runner.ingest_weights("hf://owner/model@abc123", "s3://dst/models/model", "model")
+        download.assert_called_once_with(repo_id="owner/model", revision="abc123", local_dir="/tmp/hf/model")
+        run.assert_called_once_with(
+            ["s5cmd", "cp", "/tmp/hf/model/", "s3://dst/models/model/"],
+            check=True,
+        )
+
+    @patch.object(co.subprocess, "run")
+    @patch.object(co, "snapshot_download")
+    def test_source_without_revision_keeps_the_current_download_call(self, download: Any, run: Any) -> None:
+        runner = co.Runner()
+        runner.ingest_weights("hf://owner/model", "s3://dst/models/model", "model")
+        download.assert_called_once_with(repo_id="owner/model", local_dir="/tmp/hf/model")
+        run.assert_called_once_with(
+            ["s5cmd", "cp", "/tmp/hf/model/", "s3://dst/models/model/"],
+            check=True,
+        )
 
 
 class TestPathBBuilds(unittest.TestCase):

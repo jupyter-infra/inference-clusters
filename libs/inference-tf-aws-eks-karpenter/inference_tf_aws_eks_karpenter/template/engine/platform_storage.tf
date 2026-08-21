@@ -236,9 +236,10 @@ locals {
 
   # PVC name + namespace the storage chart materializes for S3-mount. The
   # s3_mount_platform_info ConfigMap advertises these so tracks discover them
-  # rather than hardcoding.
-  s3_mount_pvc_name      = "model-store"
-  s3_mount_pvc_namespace = "default"
+  # rather than hardcoding. Namespace matches the FSx PVC's (workload namespace,
+  # via s3.claimNamespace on helm_release.storage below) so PVC consumers use one
+  # place for both backends.
+  s3_mount_pvc_name = "model-store"
 }
 
 resource "helm_release" "storage" {
@@ -252,6 +253,7 @@ resource "helm_release" "storage" {
       { name = "s3.bucketName", value = module.model_store.bucket_name },
       { name = "s3.region", value = data.aws_region.current.id },
       { name = "s3.modelsPrefix", value = local.model_store_models_prefix },
+      { name = "s3.claimNamespace", value = kubernetes_namespace_v1.workload.metadata[0].name },
       # Chart content hash so editing a chart file triggers a re-apply (see main.tf).
       { name = "chartContentHash", value = local.chart_hashes["storage"] },
       { name = "fsx.enabled", value = tostring(var.enable_fsx) },
@@ -286,16 +288,14 @@ resource "helm_release" "storage" {
 # than "check-for-ConfigMap else hardcode-defaults." Unconditional (S3-mount is
 # always on, unlike FSx which is opt-in).
 #
-# `capabilities` and `platformPvcNamespace` are the load-bearing fields for
-# backend selection:
-#   - capabilities: "read-only, partial-posix" — surfaces the honest constraints
-#     (Mountpoint doesn't support atomic renames, POSIX locking, or writes to
-#     existing keys). A track that needs RWX/POSIX rejects this backend on read.
-#   - platformPvcNamespace: today the S3-mount PVC lands in "default" (values.yaml
-#     default, never overridden). Cross-namespace PVC consumption isn't supported
-#     natively, so the ConfigMap surfaces the ACTUAL location. A follow-up will
-#     relocate it to the workload namespace (matching the FSx placement); the
-#     ConfigMap update rolls with that move.
+# `capabilities` is the load-bearing field for backend selection:
+#   - "read-only, partial-posix" — surfaces the honest constraints (Mountpoint
+#     doesn't support atomic renames, POSIX locking, or writes to existing keys).
+#     A track that needs RWX/POSIX rejects this backend on read.
+#
+# platformPvcNamespace advertises the workload namespace, matching where both
+# the S3-mount PVC (via s3.claimNamespace) and the FSx PVC land — so consumers
+# use one namespace for both backends.
 resource "kubernetes_config_map_v1" "s3_mount_platform_info" {
   metadata {
     name      = "s3-mount-platform-info"
@@ -316,7 +316,7 @@ resource "kubernetes_config_map_v1" "s3_mount_platform_info" {
     mountPath            = local.s3_mount_path
     dataRepositoryPath   = "s3://${module.model_store.bucket_name}/${local.model_store_models_prefix}/"
     platformPvcName      = local.s3_mount_pvc_name
-    platformPvcNamespace = local.s3_mount_pvc_namespace
+    platformPvcNamespace = kubernetes_namespace_v1.workload.metadata[0].name
     # Honest labeling: Mountpoint mounts are ReadOnlyMany + partial POSIX. Tracks
     # that need RWX or full POSIX (locking, atomic rename) reject this backend on
     # read and fall through to FSx (or fail loud when FSx isn't enabled).

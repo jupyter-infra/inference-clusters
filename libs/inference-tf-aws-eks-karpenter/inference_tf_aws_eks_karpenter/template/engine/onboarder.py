@@ -22,13 +22,9 @@ TWO input formats are supported and auto-detected from the unpacked artifact dir
           images:  [ "resources[0].template.spec...containers[0].image", ... ]
           weights: [ "resources[0].template.spec...containers[0].args[0]", ... ]
           builds:  [ {path, context, name, tag}, ... ]   # images with NO upstream to import
-      Any list may be empty — a storage-only block (PV+PVC, no containers/weights) has
-      nothing to rehost and its graph.yaml is already air-gapped-clean, so it just gets
-      passed through as the emitted air-gapped copy so the deployer's single apply path
-      still works. We read the literal ref at each `images:` path, vendor it (skopeo copy),
-      and — for each `builds:` entry — BUILD the source dir at `context` into our ECR via
-      the image-build primitive (there is no upstream to skopeo-copy). Both then write a
-      REWRITTEN COPY —
+      We read the literal ref at each `images:` path, vendor it (skopeo copy), and — for each
+      `builds:` entry — BUILD the source dir at `context` into our ECR via the image-build
+      primitive (there is no upstream to skopeo-copy). Both then write a REWRITTEN COPY —
       `graph-air-gapped.yaml` — with our ECR/S3 refs. graph.yaml is left pristine.
       Backstop: field-level — every listed image-path in the emitted graph resolves to
       our ECR `@sha256:`, every weight-path to our S3 (cluster-independent).
@@ -437,9 +433,12 @@ class Runner:
         if source.startswith("s3://"):
             self._copy_s3_prefix(source, dst_uri)
         elif source.startswith("hf://"):
-            repo_id = source[len("hf://") :].partition("@")[0]
+            repo_id, separator, revision = source[len("hf://") :].partition("@")
             stage = f"/tmp/hf/{name}"
-            snapshot_download(repo_id=repo_id, local_dir=stage)
+            if separator:
+                snapshot_download(repo_id=repo_id, revision=revision, local_dir=stage)
+            else:
+                snapshot_download(repo_id=repo_id, local_dir=stage)
             subprocess.run(["s5cmd", "cp", f"{stage}/", f"{dst_uri}/"], check=True)
         else:
             raise SystemExit(f"[onboard] ERROR: unsupported weight source {source!r} (want hf:// or s3://)")
@@ -759,11 +758,8 @@ class Onboarder:
         image_paths = sidecar.get("images") or []
         weight_paths = sidecar.get("weights") or []
         builds = sidecar.get("builds") or []
-
-        # All three lists may be empty — a storage-only block (PV+PVC, no containers,
-        # no weights, no builds) has nothing to rehost and just gets its graph.yaml
-        # passed through as the emitted air-gapped copy so the deployer's single
-        # apply path still works. NOT an error condition.
+        if not image_paths and not builds:
+            raise SystemExit("[onboard] ERROR: graph values.yaml has no images: or builds: field-paths to rehost")
 
         if image_paths:
             log(f"rehosting images to {self.ecr}/{self.prefix}/*")
