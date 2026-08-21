@@ -6,6 +6,6 @@ apiVersion: kro.run/v1alpha1
 kind: ServableGraphInference
 metadata:
   name: qwen-graph
-  namespace: default
+  namespace: ${namespace}
 spec:
   servedModelName: qwen2.5-7b

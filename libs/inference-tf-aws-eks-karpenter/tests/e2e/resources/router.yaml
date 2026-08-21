@@ -13,12 +13,12 @@
 # the KEDA->Karpenter chain is already proven by test_vllm_serving / test_kro_graph_serving;
 # this test isolates the router-metric -> KEDA -> pod 0->1->0 half.)
 #
-# ${backend_url} and ${router_image} are substituted at apply time (h.apply_resource).
+# ${backend_url}, ${router_image}, and ${namespace} are substituted at apply time (h.apply_resource).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: keda-router
-  namespace: default
+  namespace: ${namespace}
   labels:
     app: keda-router
 spec:
@@ -68,7 +68,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: keda-router
-  namespace: default
+  namespace: ${namespace}
   labels:
     app: keda-router
 spec:
@@ -83,7 +83,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: keda-router
-  namespace: default
+  namespace: ${namespace}
   labels:
     # The kube-prometheus-stack Prometheus selects ServiceMonitors on this release label
     # (serviceMonitorSelector = release: kube-prometheus-stack) — without it the router's
