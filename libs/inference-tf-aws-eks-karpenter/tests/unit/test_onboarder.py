@@ -272,7 +272,9 @@ class TestHuggingFaceIngest(unittest.TestCase):
     def test_revision_is_forwarded(self, download: Any, run: Any) -> None:
         runner = co.Runner()
         runner.ingest_weights("hf://owner/model@abc123", "s3://dst/models/model", "model")
-        download.assert_called_once_with(repo_id="owner/model", revision="abc123", local_dir="/tmp/hf/model")
+        download.assert_called_once_with(
+            repo_id="owner/model", revision="abc123", local_dir="/tmp/hf/model", token=None
+        )
         run.assert_called_once_with(
             ["s5cmd", "cp", "/tmp/hf/model/", "s3://dst/models/model/"],
             check=True,
@@ -283,7 +285,7 @@ class TestHuggingFaceIngest(unittest.TestCase):
     def test_source_without_revision_keeps_the_current_download_call(self, download: Any, run: Any) -> None:
         runner = co.Runner()
         runner.ingest_weights("hf://owner/model", "s3://dst/models/model", "model")
-        download.assert_called_once_with(repo_id="owner/model", local_dir="/tmp/hf/model")
+        download.assert_called_once_with(repo_id="owner/model", local_dir="/tmp/hf/model", token=None)
         run.assert_called_once_with(
             ["s5cmd", "cp", "/tmp/hf/model/", "s3://dst/models/model/"],
             check=True,
@@ -627,8 +629,10 @@ class TestIngestWeights(unittest.TestCase):
             patch.object(co.subprocess, "run"),
         ):
             runner.ingest_weights("hf://Qwen/Qwen2.5-0.5B-Instruct@abc123", f"{MODELS}/qwen", "qwen")
-        # the @revision is not part of the repo id passed to the Hub client
-        snap.assert_called_once_with(repo_id="Qwen/Qwen2.5-0.5B-Instruct", local_dir="/tmp/hf/qwen", token=None)
+        # the @revision is forwarded as its own kwarg, not left in the repo id
+        snap.assert_called_once_with(
+            repo_id="Qwen/Qwen2.5-0.5B-Instruct", revision="abc123", local_dir="/tmp/hf/qwen", token=None
+        )
 
     def test_dry_run_copies_nothing(self) -> None:
         runner = co.Runner(dry_run=True)
