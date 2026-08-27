@@ -41,14 +41,8 @@ fsx:
   # -- Namespace + name of the FSx PVC charts mount.
   claimNamespace: default
   claimName: model-store-fsx
-  # -- Hydration primitive: FsxHydrate KRO RGD (fsx-hydrate-rgd.yaml). Tracks
-  #    compose a FsxHydrate CR into their own graph next to the workload they
-  #    want pre-warmed; KRO expands each CR to one Job doing `lfs hsm_restore`
-  #    on models/<prefix> and touching a `.hydrated-<slug>` sentinel in the
-  #    mount root. Fires at TRACK-DEPLOY time (post onboarder), not `jd up`.
   hydrator:
-    # -- Container image with a Lustre client available on `dnf install`.
-    #    AL2023 ships lustre2.15-client, so amazonlinux:2023 via the ECR
-    #    pull-through cache is the natural choice; endpoints-only VPCs can't
-    #    reach public.ecr.aws directly.
+    # -- Container image the FsxHydrate KRO Job runs on. Needs sh +
+    #    coreutils only (busybox is fine); Lustre restore happens
+    #    kernel-side via a read syscall, no `lfs` client required.
     image: ""

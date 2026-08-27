@@ -268,10 +268,7 @@ resource "helm_release" "storage" {
       { name = "fsx.availabilityZone", value = data.aws_subnet.fsx[0].availability_zone },
       { name = "fsx.capacity", value = "${var.fsx_storage_capacity_gib}Gi" },
       { name = "fsx.claimNamespace", value = kubernetes_namespace_v1.workload.metadata[0].name },
-      # AL2023 (dnf ships lustre2.15-client) via ECR pull-through — the
-      # endpoints-only VPC can't reach public.ecr.aws directly. The FsxHydrate
-      # RGD (charts/storage/templates/fsx-hydrate-rgd.yaml) uses this image.
-      { name = "fsx.hydrator.image", value = "${local.ecr_registry}/ecr-public/amazonlinux/amazonlinux:2023" },
+      { name = "fsx.hydrator.image", value = "${local.ecr_registry}/ecr-public/docker/library/busybox:1.36" },
     ] : [],
   )
 

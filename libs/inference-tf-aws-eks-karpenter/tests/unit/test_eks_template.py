@@ -873,7 +873,7 @@ def test_fsx_hydrate_rgd_shape() -> None:
 
     storage = _resource((ENGINE / "platform_storage.tf").read_text(), "helm_release", "storage")
     assert '"fsx.hydrator.image"' in storage
-    assert "ecr-public/amazonlinux/amazonlinux" in storage
+    assert "ecr-public/docker/library/busybox" in storage
     assert "helm_release.kro" in storage, "storage release must depend on the KRO CRD"
 
 

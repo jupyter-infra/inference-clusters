@@ -257,8 +257,7 @@ class TestPathBGraph(unittest.TestCase):
             co.onboard(graph, tmp, _onboarder(runner))
             self.assertEqual(runner.ingested, [(source, f"{MODELS}/mock-tiny")])
 
-    def test_graph_without_image_or_weight_paths_emits_pristine_air_gapped(self) -> None:
-        # Truly storage-only block (PV+PVC, no image refs anywhere): passthrough.
+    def test_graph_with_storage_only_flag_emits_pristine_air_gapped(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             graph = tmp / "storage-only"
@@ -270,7 +269,7 @@ class TestPathBGraph(unittest.TestCase):
                 "        apiVersion: v1\n        kind: PersistentVolumeClaim\n"
                 "        metadata: {name: model-store-fsx}\n"
             )
-            (graph / "values.yaml").write_text("images: []\nweights: []\n")
+            (graph / "values.yaml").write_text("storageOnly: true\n")
             original = yaml.safe_load((graph / "graph.yaml").read_text())
 
             result = co.onboard(graph, tmp, _onboarder(FakeRunner()))
@@ -278,15 +277,20 @@ class TestPathBGraph(unittest.TestCase):
             emitted = yaml.safe_load(result.output_file.read_text())
             self.assertEqual(emitted, original)
 
-    def test_graph_with_image_ref_but_empty_values_fails_loud(self) -> None:
-        # values.yaml declared empty but graph.yaml still has an image ref — the
-        # typo case (`image:` instead of `images:`). Must SystemExit at onboard
-        # time so it doesn't silently pass through and surface as ErrImagePull
-        # on the endpoints-only VPC at deploy time.
+    def test_graph_with_empty_lists_and_no_flag_fails_loud(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             graph = self._stage(tmp, "mock-graph")
             (graph / "values.yaml").write_text("images: []\nweights: []\n")
+            with self.assertRaises(SystemExit) as cm:
+                co.onboard(graph, tmp, _onboarder(FakeRunner()))
+            self.assertIn("storageOnly: true", str(cm.exception))
+
+    def test_graph_with_storage_only_flag_but_stray_image_fails_loud(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            graph = self._stage(tmp, "mock-graph")
+            (graph / "values.yaml").write_text("storageOnly: true\n")
             with self.assertRaises(SystemExit) as cm:
                 co.onboard(graph, tmp, _onboarder(FakeRunner()))
             self.assertIn("image-like refs", str(cm.exception))
