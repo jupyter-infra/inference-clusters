@@ -139,6 +139,7 @@ project for descriptions and recommended values. Grouped by concern:
 | Storage / images | `mountpoint_s3_csi_version`, `common_images`, `workload_namespace` |
 | FSx for Lustre (opt-in) | `enable_fsx`, `fsx_storage_capacity_gib`, `fsx_per_unit_storage_throughput`, `fsx_imported_file_chunk_size_mib`, `fsx_kms_key_arn`, `fsx_csi_driver_chart_version` |
 | Inference routing | `enable_inference_routing` |
+| Onboarder | `hf_token_secret_arn` |
 
 ## Outputs
 
