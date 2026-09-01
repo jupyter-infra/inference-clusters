@@ -1,0 +1,22 @@
+# Throwaway EC2NodeClass used only by test_nodeclass_gc to prove that a NodeClass
+# can be created AND fully deleted (its karpenter.k8s.aws/termination finalizer
+# completes). No NodePool references it, so applying/deleting it never provisions or
+# drains a node — it exercises purely the NodeClass reconcile + GC path, which calls
+# iam:GetInstanceProfile/ListInstanceProfiles. Mirrors the cpu NodeClass shape:
+# pre-created instanceProfile, al2023 AMI, discovery-tagged SG/subnets.
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: e2e-nodeclass-gc-probe
+spec:
+  amiSelectorTerms:
+    - alias: al2023@latest
+  instanceProfile: ${cluster_name}-node
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: ${cluster_name}
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: ${cluster_name}
+  tags:
+    karpenter.sh/discovery: ${cluster_name}

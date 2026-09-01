@@ -1322,3 +1322,36 @@ def test_workload_repo_cleanup_runs_after_creators() -> None:
     image_build_module = re.search(r'module\s+"image_build".*?\n\}', image_build, re.DOTALL)
     assert image_build_module is not None
     assert "depends_on = [null_resource.workload_repo_cleanup]" in image_build_module.group(0)
+
+
+# --- Karpenter air-gap: NodeClass GC must complete without reachable IAM ---
+#
+# Guards the two-part fix for the instance-profile-GC finalizer wedge (a deleted
+# EC2NodeClass hangs in Terminating, dragging its NodePool to NotReady) when the VPC
+# is endpoints-only and IAM is unreachable. The e2e test proves the runtime behavior;
+# these are the cheap config guards so the wiring can't silently regress.
+
+
+def test_karpenter_isolated_vpc_tracks_egress_posture() -> None:
+    """Karpenter runs in isolated-VPC mode iff NAT is off (the default endpoints-only posture).
+
+    settings.isolatedVPC=true de-registers the instance-profile GC controller (Karpenter
+    >=1.8.3), so it never calls iam:ListInstanceProfiles — which has no route without an IAM
+    VPC endpoint (none exists in us-west-2) or NAT, and whose failure otherwise wedges the
+    NodeClass termination finalizer. It also skips the (also-unreachable) pricing endpoint.
+    """
+    content = (ENGINE / "platform_karpenter.tf").read_text()
+    assert 'name  = "settings.isolatedVPC"' in content, "Karpenter isolatedVPC setting not wired"
+    # Isolated when NAT is off; not-isolated when NAT provides egress.
+    assert "tostring(!var.enable_nat_gateway)" in content, "isolatedVPC must track the egress posture"
+
+
+def test_karpenter_controller_can_read_instance_profiles() -> None:
+    """The controller policy grants the instance-profile READ actions (matching Karpenter's own
+    default ResourceDiscoveryPolicy), so the GC controller works in the NAT posture where it
+    runs and reaches IAM. Harmless in isolated mode (the controller isn't registered)."""
+    policy = _extract_block(
+        (ENGINE / "iam.tf").read_text(), "data", "aws_iam_policy_document", "karpenter_controller"
+    )
+    assert "iam:ListInstanceProfiles" in policy, "GC controller needs iam:ListInstanceProfiles in NAT posture"
+    assert "iam:GetInstanceProfile" in policy, "reconciler needs iam:GetInstanceProfile in NAT posture"

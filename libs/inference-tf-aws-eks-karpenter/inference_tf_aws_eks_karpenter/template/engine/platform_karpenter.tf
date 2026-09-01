@@ -133,6 +133,22 @@ resource "helm_release" "karpenter" {
       value = aws_sqs_queue.karpenter_interruption.name
     },
     {
+      # Isolated-VPC mode tracks the egress posture: on by default (endpoints-only),
+      # off when NAT is enabled. It (1) skips AWS on-demand pricing lookups (there is
+      # no pricing VPC endpoint — Karpenter falls back to embedded pricing) and, since
+      # Karpenter 1.8.3 (aws/karpenter-provider-aws#8617), (2) does NOT register the
+      # nodeclass instance-profile garbage-collection controller — which otherwise
+      # calls iam:ListInstanceProfiles on a timer. Without this, that call has no route
+      # (no IAM VPC endpoint exists in us-west-2; IAM interface endpoints are us-east-1
+      # / cn-north-1 / us-gov-west-1 only) so it times out AND — worse — the
+      # EC2NodeClass termination finalizer can never complete, so a deleted NodeClass
+      # wedges in Terminating and drags its whole NodePool to NotReady. With a
+      # pre-created spec.instanceProfile (which this template always uses),
+      # isolatedVPC=true means Karpenter makes ZERO IAM calls — the true air-gap posture.
+      name  = "settings.isolatedVPC"
+      value = tostring(!var.enable_nat_gateway)
+    },
+    {
       # v1 chart: disable the validating webhook (blueprint) — avoids webhook/cert
       # races on a fresh cluster; CRD validation still applies.
       name  = "webhook.enabled"
