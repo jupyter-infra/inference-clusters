@@ -52,15 +52,17 @@ spec:
         volumeSize: {{ .Values.blockDevice.volumeSizeGi }}Gi
         volumeType: {{ .Values.blockDevice.volumeType }}
         encrypted: true
-  # IMDSv2 with hop limit 2: a CONTAINERIZED process (pod) is one network hop
-  # beyond the host, so with the Karpenter default hop limit of 1 a pod cannot reach
-  # IMDS → node-role credentials are invisible to pods (S3-direct/SDK "Unable to
-  # locate credentials"). The bootstrap MNG launch template sets 2 for the same
-  # reason; Karpenter does NOT inherit that.
+  # IMDSv2 (httpTokens: required) + hop limit 1: a CONTAINERIZED process (pod) is one
+  # network hop beyond the host, so a hop limit of 1 makes IMDS responses (TTL=1) expire
+  # before they reach the pod namespace — pods CANNOT read IMDS or assume the node role
+  # via SSRF. Workloads that need AWS get scoped credentials from EKS Pod Identity (the
+  # on-host agent serves them over a link-local endpoint at a normal TTL, independent of
+  # the hop limit), so nothing in a pod needs IMDS. Matches the bootstrap MNG launch
+  # template. See test_imds_blocked.
   metadataOptions:
     httpEndpoint: enabled
     httpTokens: required
-    httpPutResponseHopLimit: 2
+    httpPutResponseHopLimit: 1
   tags:
     karpenter.sh/discovery: {{ .Values.discoveryTag | quote }}
 {{- if .Values.gpuP.enabled }}
@@ -89,10 +91,12 @@ spec:
         volumeType: {{ .Values.blockDevice.volumeType }}
         encrypted: true
 {{- include "karpenter.gpuEbsTuning" . }}
+  # IMDSv2 + hop limit 1 — pods cannot reach IMDS / the node role via SSRF; AWS creds
+  # come from EKS Pod Identity, not IMDS. See the cpu class comment + test_imds_blocked.
   metadataOptions:
     httpEndpoint: enabled
     httpTokens: required
-    httpPutResponseHopLimit: 2
+    httpPutResponseHopLimit: 1
 {{- if .Values.gpuP.capacityReservationId }}
   # ODCR seam: pin the P pool to a Capacity Reservation. Karpenter launches
   # into the reservation instead of plain on-demand — the way orgs secure scarce P
@@ -132,15 +136,17 @@ spec:
         volumeType: {{ .Values.blockDevice.volumeType }}
         encrypted: true
 {{- include "karpenter.gpuEbsTuning" . }}
-  # IMDSv2 with hop limit 2: a CONTAINERIZED process (pod) is one network hop
-  # beyond the host, so with the Karpenter default hop limit of 1 a pod cannot reach
-  # IMDS → node-role credentials are invisible to pods (S3-direct/SDK "Unable to
-  # locate credentials"). The bootstrap MNG launch template sets 2 for the same
-  # reason; Karpenter does NOT inherit that.
+  # IMDSv2 (httpTokens: required) + hop limit 1: a CONTAINERIZED process (pod) is one
+  # network hop beyond the host, so a hop limit of 1 makes IMDS responses (TTL=1) expire
+  # before they reach the pod namespace — pods CANNOT read IMDS or assume the node role
+  # via SSRF. Workloads that need AWS get scoped credentials from EKS Pod Identity (the
+  # on-host agent serves them over a link-local endpoint at a normal TTL, independent of
+  # the hop limit), so nothing in a pod needs IMDS. Matches the bootstrap MNG launch
+  # template. See test_imds_blocked.
   metadataOptions:
     httpEndpoint: enabled
     httpTokens: required
-    httpPutResponseHopLimit: 2
+    httpPutResponseHopLimit: 1
 {{ include "karpenter.gpuParallelPullUserData" . }}
   tags:
     karpenter.sh/discovery: {{ .Values.discoveryTag | quote }}
