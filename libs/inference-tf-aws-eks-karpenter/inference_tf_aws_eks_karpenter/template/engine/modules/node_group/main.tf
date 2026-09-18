@@ -26,17 +26,11 @@ resource "aws_launch_template" "this" {
     }
   }
 
-  # IMDSv2 (http_tokens required) + hop limit 1: a pod is one network hop beyond the
-  # host, so a hop limit of 1 makes IMDS responses (TTL=1) expire before they reach the
-  # pod namespace — pods CANNOT read IMDS or assume the node role via SSRF, while the
-  # host itself (hop 0) still bootstraps normally. Workloads that need AWS get scoped
-  # credentials from EKS Pod Identity, not the node role via IMDS (the agent serves them
-  # over a link-local endpoint at a normal TTL, independent of the hop limit). The
-  # EC2NodeClass metadataOptions match this; test_imds_blocked asserts a pod cannot reach IMDS.
+  # IMDSv2 with hop limit 2 (required default for MNG custom launch templates).
   metadata_options {
     http_endpoint               = "enabled"
     http_tokens                 = "required"
-    http_put_response_hop_limit = 1
+    http_put_response_hop_limit = 2
   }
 
   # --- containerd registry-mirror userData: redirect upstream pulls to ECR pull-through ---
