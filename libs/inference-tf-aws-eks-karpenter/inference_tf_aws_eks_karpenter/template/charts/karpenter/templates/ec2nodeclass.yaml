@@ -52,13 +52,9 @@ spec:
         volumeSize: {{ .Values.blockDevice.volumeSizeGi }}Gi
         volumeType: {{ .Values.blockDevice.volumeType }}
         encrypted: true
-  # IMDSv2 (httpTokens: required) + hop limit 1: a CONTAINERIZED process (pod) is one
-  # network hop beyond the host, so a hop limit of 1 makes IMDS responses (TTL=1) expire
-  # before they reach the pod namespace — pods CANNOT read IMDS or assume the node role
-  # via SSRF. Workloads that need AWS get scoped credentials from EKS Pod Identity (the
-  # on-host agent serves them over a link-local endpoint at a normal TTL, independent of
-  # the hop limit), so nothing in a pod needs IMDS. Matches the bootstrap MNG launch
-  # template. See test_imds_blocked.
+  # Hop limit 1: a pod is one hop beyond the host, so an IMDS response (TTL=1) expires
+  # before reaching it — pods cannot read IMDS or assume the node role via SSRF.
+  # Workloads get AWS creds from EKS Pod Identity, not IMDS. See test_imds_blocked.
   metadataOptions:
     httpEndpoint: enabled
     httpTokens: required
@@ -91,8 +87,7 @@ spec:
         volumeType: {{ .Values.blockDevice.volumeType }}
         encrypted: true
 {{- include "karpenter.gpuEbsTuning" . }}
-  # IMDSv2 + hop limit 1 — pods cannot reach IMDS / the node role via SSRF; AWS creds
-  # come from EKS Pod Identity, not IMDS. See the cpu class comment + test_imds_blocked.
+  # Hop limit 1 — pods cannot reach IMDS / the node role via SSRF. See the cpu class.
   metadataOptions:
     httpEndpoint: enabled
     httpTokens: required
@@ -136,13 +131,9 @@ spec:
         volumeType: {{ .Values.blockDevice.volumeType }}
         encrypted: true
 {{- include "karpenter.gpuEbsTuning" . }}
-  # IMDSv2 (httpTokens: required) + hop limit 1: a CONTAINERIZED process (pod) is one
-  # network hop beyond the host, so a hop limit of 1 makes IMDS responses (TTL=1) expire
-  # before they reach the pod namespace — pods CANNOT read IMDS or assume the node role
-  # via SSRF. Workloads that need AWS get scoped credentials from EKS Pod Identity (the
-  # on-host agent serves them over a link-local endpoint at a normal TTL, independent of
-  # the hop limit), so nothing in a pod needs IMDS. Matches the bootstrap MNG launch
-  # template. See test_imds_blocked.
+  # Hop limit 1: a pod is one hop beyond the host, so an IMDS response (TTL=1) expires
+  # before reaching it — pods cannot read IMDS or assume the node role via SSRF.
+  # Workloads get AWS creds from EKS Pod Identity, not IMDS. See test_imds_blocked.
   metadataOptions:
     httpEndpoint: enabled
     httpTokens: required
