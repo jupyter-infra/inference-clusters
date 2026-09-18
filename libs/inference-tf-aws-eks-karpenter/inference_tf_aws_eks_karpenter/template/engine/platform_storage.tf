@@ -5,7 +5,8 @@
 # weights (those arrive via onboarder). Day-1 offers two weight-serving paths, both
 # fed by the model-store bucket:
 #   1. S3-direct: the engine streams weights straight from S3 (vLLM RunAI streamer /
-#      Tensorizer / SDK) using the NODE ROLE's S3 grant — no filesystem.
+#      Tensorizer / SDK) — no filesystem. From a pod this requires a Pod Identity role;
+#      hop-limit-1 blocks pods from the node role via IMDS. No shipped chart uses it today.
 #   2. S3-mount: the Mountpoint-for-S3 CSI driver mounts s3://<bucket>/models as a
 #      read-only POSIX path via the s3-models StorageClass (static PV), using a
 #      dedicated Pod Identity role.
@@ -27,13 +28,12 @@ locals {
   model_store_models_prefix = "models"
 }
 
-# --- S3-direct path: node-role grant (model store, read-only) ---
+# --- Node-role grant: model store, read-only (node-level only) ---
 #
-# containerd/kubelet and any pod on any node reach the bucket through the node
-# instance role — no per-chart wiring. Scoped to THIS bucket ARN (never *) and
-# READ-ONLY: only the onboarder writes weights, so workloads cannot alter them.
-# This is the day-1 streaming grant AND what a pod's AWS SDK uses for S3-direct
-# weight loading.
+# containerd/kubelet reach the bucket through the node instance role at hop 0. Pods
+# CANNOT (hop-limit-1 blocks pod IMDS) — a pod streaming S3-direct must use a Pod
+# Identity role, like batch-inference. Scoped to THIS bucket ARN (never *) and READ-ONLY:
+# only the onboarder writes weights, so workloads cannot alter them.
 data "aws_iam_policy_document" "node_s3" {
   statement {
     sid       = "ListModelStore"
