@@ -5,12 +5,13 @@ equal to the hop limit, so at limit 1 the response expires before reaching the p
 cannot read instance metadata or assume the node role via SSRF. Workloads get AWS creds
 from EKS Pod Identity instead (see test_batch_s3_access), so this costs them nothing.
 
-Probes run on both launch paths — the Karpenter EC2NodeClasses (cpu, gpu-g) and the
+Probes run on both distinct launch paths — the Karpenter EC2NodeClass (cpu) and the
 bootstrap MNG launch template — because each sets the hop limit through a different
-mechanism. gpu-p is covered statically by the unit test (identical config, capacity-gated
-instances). A hostNetwork pod (hop 0) is the positive control: it MUST reach IMDS, pinning
-the block to the hop limit rather than a route/firewall/image problem. busybox comes from
-ECR pull-through (the endpoints-only VPC cannot pull from Docker Hub).
+mechanism. The gpu/gpu-p classes render an identical metadataOptions block, covered
+statically by the unit test (a fresh GPU node also makes a live probe flaky). A hostNetwork
+pod (hop 0) is the positive control: it MUST reach IMDS, pinning the block to the hop limit
+rather than a route/firewall/image problem. busybox comes from ECR pull-through (the
+endpoints-only VPC cannot pull from Docker Hub).
 """
 
 import json
@@ -27,15 +28,13 @@ IMDS_URL = "http://169.254.169.254/latest/meta-data/"
 _WGET_TIMEOUT_S = 5
 _HARD_TIMEOUT_S = 15
 
-_GPU_TOLERATION = {"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"}
 _SYSTEM_TOLERATION = {"key": "inference/role", "operator": "Equal", "value": "system", "effect": "NoSchedule"}
 
-# One target per node launch path. gpu-g is marked gpu so conftest groups it into the
-# warm-GPU block and it rides an existing GPU node instead of forcing a new one.
+# One target per distinct launch path: the Karpenter EC2NodeClass (cpu) and the MNG
+# launch template (system). gpu/gpu-p share cpu's metadataOptions — covered by the unit test.
 NODE_TARGETS = [
     pytest.param({"karpenter.sh/nodepool": "cpu"}, [], id="karpenter-cpu"),
     pytest.param({"inference/role": "system"}, [_SYSTEM_TOLERATION], id="mng-bootstrap"),
-    pytest.param({"inference/accelerator": "nvidia-g"}, [_GPU_TOLERATION], id="karpenter-gpu-g", marks=pytest.mark.gpu),
 ]
 
 
