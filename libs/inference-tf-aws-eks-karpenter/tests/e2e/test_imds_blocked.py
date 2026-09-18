@@ -35,9 +35,7 @@ _SYSTEM_TOLERATION = {"key": "inference/role", "operator": "Equal", "value": "sy
 NODE_TARGETS = [
     pytest.param({"karpenter.sh/nodepool": "cpu"}, [], id="karpenter-cpu"),
     pytest.param({"inference/role": "system"}, [_SYSTEM_TOLERATION], id="mng-bootstrap"),
-    pytest.param(
-        {"inference/accelerator": "nvidia-g"}, [_GPU_TOLERATION], id="karpenter-gpu-g", marks=pytest.mark.gpu
-    ),
+    pytest.param({"inference/accelerator": "nvidia-g"}, [_GPU_TOLERATION], id="karpenter-gpu-g", marks=pytest.mark.gpu),
 ]
 
 
@@ -53,8 +51,19 @@ def _run_probe(pod: str, image: str, node_selector: dict, tolerations: list, *, 
     }
     run_kubectl("delete", "pod", pod, "-n", PROBE_NS, "--ignore-not-found", "--wait=false", check=False)
     run_kubectl(
-        "run", pod, "-n", PROBE_NS, "--image", image, "--restart=Never",
-        f"--overrides={json.dumps(overrides)}", "--command", "--", "sleep", "3600", check=True,
+        "run",
+        pod,
+        "-n",
+        PROBE_NS,
+        "--image",
+        image,
+        "--restart=Never",
+        f"--overrides={json.dumps(overrides)}",
+        "--command",
+        "--",
+        "sleep",
+        "3600",
+        check=True,
     )
     run_kubectl("wait", "--for=condition=Ready", f"pod/{pod}", "-n", PROBE_NS, "--timeout=300s", check=True)
 
