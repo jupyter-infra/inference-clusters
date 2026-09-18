@@ -398,10 +398,15 @@ def test_nodeclass_uses_precreated_instance_profile_not_role() -> None:
     assert "aws_iam_instance_profile.node.name" in (ENGINE / "platform_karpenter.tf").read_text()
 
 
-def test_ec2nodeclass_imds_hop_limit_allows_pod_creds() -> None:
-    """All three EC2NodeClasses MUST set IMDS hop limit 2 (default 1 blocks a pod → node-role creds)."""
+def test_ec2nodeclass_imds_hop_limit_blocks_pod_access() -> None:
+    """All three EC2NodeClasses MUST set IMDS hop limit 1 so a pod (one hop beyond the host)
+    cannot reach IMDS or assume the node role via SSRF. Workloads get AWS creds from EKS Pod
+    Identity, not the node role via IMDS — so nothing legitimate needs the extra hop. The live
+    counterpart is tests/e2e/test_imds_blocked.py."""
     content = (CHARTS / "karpenter" / "templates" / "ec2nodeclass.yaml").read_text()
-    assert content.count("httpPutResponseHopLimit: 2") == 3, "cpu, gpu, gpu-p must all set hop limit 2"
+    assert content.count("httpPutResponseHopLimit: 1") == 3, "cpu, gpu, gpu-p must all set hop limit 1"
+    assert "httpPutResponseHopLimit: 2" not in content, "hop limit 2 lets pods reach IMDS — regression"
+    assert content.count("httpTokens: required") == 3, "IMDSv2 must be required on all node classes"
 
 
 def test_node_s3_grant_scoped_to_bucket_not_star() -> None:
