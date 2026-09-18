@@ -404,9 +404,11 @@ def test_ec2nodeclass_imds_hop_limit_blocks_pod_access() -> None:
     Identity, not the node role via IMDS — so nothing legitimate needs the extra hop. The live
     counterpart is tests/e2e/test_imds_blocked.py."""
     content = (CHARTS / "karpenter" / "templates" / "ec2nodeclass.yaml").read_text()
-    assert content.count("httpPutResponseHopLimit: 1") == 3, "cpu, gpu, gpu-p must all set hop limit 1"
-    assert "httpPutResponseHopLimit: 2" not in content, "hop limit 2 lets pods reach IMDS — regression"
-    assert content.count("httpTokens: required") == 3, "IMDSv2 must be required on all node classes"
+    # Anchor to the indented YAML config lines, not substrings — the surrounding comments
+    # also mention "httpTokens: required", which would inflate a bare count.
+    assert content.count("\n    httpPutResponseHopLimit: 1") == 3, "cpu, gpu, gpu-p must all set hop limit 1"
+    assert "\n    httpPutResponseHopLimit: 2" not in content, "hop limit 2 lets pods reach IMDS — regression"
+    assert content.count("\n    httpTokens: required") == 3, "IMDSv2 must be required on all node classes"
 
 
 def test_node_s3_grant_scoped_to_bucket_not_star() -> None:
