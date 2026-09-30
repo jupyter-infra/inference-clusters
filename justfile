@@ -18,6 +18,10 @@ lint:
 unit-test:
     uv run pytest
 
+# Scan the full git history for committed secrets (same check as CI)
+secret-scan:
+    gitleaks git . --log-opts="--all" --redact --verbose
+
 # Bump one template's version across pyproject/__init__/manifest/main.tf + synced charts, then relock
 # Templates are independently versioned; pass the template key (e.g. eks-karpenter).
 # Usage: just update-version <template> [patch|minor|major|<explicit-version>]
