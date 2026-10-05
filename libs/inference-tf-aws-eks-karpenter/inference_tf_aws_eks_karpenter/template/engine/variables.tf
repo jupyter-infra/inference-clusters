@@ -228,6 +228,20 @@ variable "grafana_version" {
   type        = string
 }
 
+variable "enable_grafana" {
+  description = <<-EOT
+    Whether to deploy Grafana (AGPL-3.0) with kube-prometheus-stack.
+
+    Opt-in: Grafana is licensed under AGPL-3.0, so customers must choose to pull it
+    into their account. When false, Prometheus, Alertmanager, node-exporter and
+    kube-state-metrics still run; only the Grafana UI, its vendored ECR image and
+    the FSx CloudWatch data source are skipped. See "External Dependencies" in README.
+
+    Recommended: false
+  EOT
+  type        = bool
+}
+
 variable "prometheus_retention" {
   description = <<-EOT
     The Prometheus metrics retention window.

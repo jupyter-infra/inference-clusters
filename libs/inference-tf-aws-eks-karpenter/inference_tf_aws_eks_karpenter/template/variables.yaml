@@ -26,6 +26,7 @@ overrides:
   # gpu_p_capacity_reservation_id: ""
   # gpu_parallel_image_pull: true
   # common_images: []
+  # enable_grafana: false   # opt-in, AGPL-3.0 (see README External Dependencies)
   # enable_fsx: false
   # fsx_storage_capacity_gib: 4800
   # fsx_per_unit_storage_throughput: 0     # 0 = auto (500 if P-pool on, else 250)

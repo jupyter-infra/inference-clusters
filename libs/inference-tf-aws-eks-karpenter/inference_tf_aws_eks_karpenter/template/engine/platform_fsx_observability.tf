@@ -190,7 +190,7 @@ resource "aws_cloudwatch_metric_alarm" "fsx_write_saturation" {
 # (see kubernetes_config_map_v1.grafana_fsx_datasource below), which the
 # Grafana query client uses to restrict its `Namespace` param on each call.
 data "aws_iam_policy_document" "grafana_cloudwatch" {
-  count = var.enable_fsx ? 1 : 0
+  count = var.enable_fsx && var.enable_grafana ? 1 : 0
 
   statement {
     sid    = "GrafanaCloudWatchReads"
@@ -207,7 +207,7 @@ data "aws_iam_policy_document" "grafana_cloudwatch" {
 }
 
 module "grafana_cloudwatch_role" {
-  count = var.enable_fsx ? 1 : 0
+  count = var.enable_fsx && var.enable_grafana ? 1 : 0
 
   source             = "./modules/iam_role"
   role_name          = "${local.resource_name_prefix}-grafana-cw"
@@ -216,14 +216,14 @@ module "grafana_cloudwatch_role" {
 }
 
 resource "aws_iam_role_policy" "grafana_cloudwatch" {
-  count  = var.enable_fsx ? 1 : 0
+  count  = var.enable_fsx && var.enable_grafana ? 1 : 0
   name   = "${local.resource_name_prefix}-grafana-cw"
   role   = module.grafana_cloudwatch_role[0].role_name
   policy = data.aws_iam_policy_document.grafana_cloudwatch[0].json
 }
 
 resource "aws_eks_pod_identity_association" "grafana_cloudwatch" {
-  count = var.enable_fsx ? 1 : 0
+  count = var.enable_fsx && var.enable_grafana ? 1 : 0
 
   cluster_name    = module.eks_cluster.cluster_name
   namespace       = local.monitoring_namespace
@@ -238,7 +238,7 @@ resource "aws_eks_pod_identity_association" "grafana_cloudwatch" {
 # `sidecar.datasources` label. The kube-prometheus-stack chart auto-discovers
 # ConfigMaps with the label `grafana_datasource: "1"` and imports them.
 resource "kubernetes_config_map_v1" "grafana_fsx_datasource" {
-  count = var.enable_fsx ? 1 : 0
+  count = var.enable_fsx && var.enable_grafana ? 1 : 0
 
   metadata {
     name      = "grafana-fsx-datasource"

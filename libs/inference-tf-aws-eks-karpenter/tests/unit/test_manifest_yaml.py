@@ -113,7 +113,6 @@ class TestManifest(unittest.TestCase):
         "keda-operator",
         "keda-metrics-apiserver",
         "keda-admission-webhooks",
-        "grafana",
         "dcgm-exporter",
         "device-plugin",
     ]

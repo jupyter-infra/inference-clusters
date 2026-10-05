@@ -152,8 +152,8 @@ output "keda_admission_webhooks_ecr_repository" {
 }
 
 output "grafana_ecr_repository" {
-  description = "ECR repository name of the vendored Grafana image."
-  value       = aws_ecr_repository.vendored["grafana"].name
+  description = "ECR repository name of the vendored Grafana image (empty unless enable_grafana)."
+  value       = var.enable_grafana ? aws_ecr_repository.vendored["grafana"].name : ""
 }
 
 output "dcgm_exporter_ecr_repository" {

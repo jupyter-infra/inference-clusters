@@ -10,7 +10,7 @@ handler parsing the result) only fails live, which raw-dict/declaration checks c
 Scope: read verbs only, across representative component types —
   - `jd component show`  on a Deployment (karpenter) AND a HelmRelease (dcgm-exporter-chart)
   - `jd component logs`  on a Deployment (karpenter)
-  - `jd image show`      on a vendored image (grafana)
+  - `jd image show`      on a vendored image (keda-operator; grafana is opt-in)
 Mutating verbs (restart, reconcile) are deliberately NOT tested: restart rolling-restarts a
 live platform operator and reconcile needs a drift scenario — both perturb a shared cluster
 for little marginal coverage over the identical read-verb wiring proved here.
@@ -71,7 +71,7 @@ def test_image_show(e2e_deployment: EndToEndDeployment) -> None:
     e2e_deployment.ensure_deployed()
 
     data = json.loads(
-        e2e_deployment.cli.run_command(["jupyter-deploy", "image", "show", "--name", "grafana", "--json"]).stdout
+        e2e_deployment.cli.run_command(["jupyter-deploy", "image", "show", "--name", "keda-operator", "--json"]).stdout
     )
-    assert data["name"] == "grafana"
+    assert data["name"] == "keda-operator"
     assert ".dkr.ecr." in data["repository_uri"], f"expected an ECR repo URI, got {data['repository_uri']!r}"

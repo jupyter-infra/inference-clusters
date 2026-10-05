@@ -673,20 +673,6 @@ components:
         method: k8s.core.deployment-logs
       restart:
         method: k8s.apps.rollout-restart
-  grafana:
-    type: Deployment
-    description: Metrics dashboards
-    resource-name: kube-prometheus-stack-grafana
-    scope: monitoring_namespace
-    verbs:
-      status:
-        method: k8s.apps.get-deployment-status
-      show:
-        method: k8s.apps.get-deployment
-      logs:
-        method: k8s.core.deployment-logs
-      restart:
-        method: k8s.apps.rollout-restart
   kube-state-metrics:
     type: Deployment
     description: Kubernetes object metrics exporter
@@ -793,10 +779,24 @@ components:
         method: helm.show
       reconcile:
         method: helm.reconcile
-  # Opt-in components: only installed when enable_lws / enable_fsx is true. On a cluster
-  # where these are false, the Deployment/DaemonSet is missing and jd health reports the
-  # entry as unhealthy — that's the correct signal (a track that requires `lws` or `fsx`
-  # in requires.platform will fail preflight, which is what we want).
+  # Opt-in components: only installed when enable_lws / enable_fsx / enable_grafana is true.
+  # On a cluster where these are false, the Deployment/DaemonSet is missing and jd health
+  # reports the entry as unhealthy — that's the correct signal (a track that requires `lws`
+  # or `fsx` in requires.platform will fail preflight, which is what we want).
+  grafana:
+    type: Deployment
+    description: Metrics dashboards (opt-in, AGPL-3.0)
+    resource-name: kube-prometheus-stack-grafana
+    scope: monitoring_namespace
+    verbs:
+      status:
+        method: k8s.apps.get-deployment-status
+      show:
+        method: k8s.apps.get-deployment
+      logs:
+        method: k8s.core.deployment-logs
+      restart:
+        method: k8s.apps.rollout-restart
   lws:
     type: Deployment
     description: LeaderWorkerSet controller (multi-node pod-group lifecycle)
@@ -838,6 +838,8 @@ components:
 # --- jd health: vendored platform images ---
 # Confirms each image the template vendors to ECR (the air-gapped failure mode) is present.
 # Workload/* images (chart-onboarded at runtime) are excluded — not known at template time.
+# Opt-in images (EFA device plugin, Grafana) are excluded too: they only exist when their
+# enable_* var is true. Grafana's repo is still exposed via the grafana_ecr_repository output.
 images:
   keda-operator:
     description: KEDA operator image
@@ -850,10 +852,6 @@ images:
   keda-admission-webhooks:
     description: KEDA admission-webhooks image
     repository-output: keda_admission_webhooks_ecr_repository
-    tag-output: vendored_image_tag
-  grafana:
-    description: Grafana image
-    repository-output: grafana_ecr_repository
     tag-output: vendored_image_tag
   dcgm-exporter:
     description: NVIDIA DCGM GPU-metrics exporter image

@@ -98,7 +98,9 @@ This project:
 - installs **Karpenter** and node pools so GPU/CPU capacity is provisioned on demand over
   **self-managed nodes**, with an optional dedicated GPU (`p`-family) node pool
 - installs the **NVIDIA device plugin** and **DCGM exporter**, with a
-  **kube-prometheus-stack** (Prometheus + Grafana) for GPU/cluster monitoring
+  **kube-prometheus-stack** (Prometheus + Alertmanager) for GPU/cluster monitoring, with
+  **Grafana** dashboards as an opt-in (`enable_grafana`; AGPL-3.0, see
+  [External Dependencies](#external-dependencies))
 - installs **KEDA** (event/metric-driven autoscaling, incl. scale-to-zero), **KRO**
   (ResourceGraphDefinition starters), **Kueue** (gang scheduling / quota), and
   **LeaderWorkerSet** (multi-node serving)
@@ -133,7 +135,7 @@ project for descriptions and recommended values. Grouped by concern:
 | Bootstrap node group | `bootstrap_instance_types`, `bootstrap_desired_size`, `bootstrap_min_size`, `bootstrap_max_size` |
 | Access | `admin_role_names`, `admin_user_names` |
 | Autoscaling / Karpenter | `karpenter_version`, `cluster_autoscaler_chart_version`, `enable_gpu_p_nodepool`, `gpu_p_capacity_reservation_id`, `gpu_parallel_image_pull`, `cpu_capacity`, `memory_capacity` |
-| GPU + monitoring | `nvidia_device_plugin_version`, `nvidia_device_plugin_chart_version`, `nvidia_dcgm_exporter_version`, `dcgm_exporter_chart_version`, `kube_prometheus_stack_chart_version`, `grafana_version`, `prometheus_retention`, `prometheus_memory_limit`, `enable_container_insights`, `metrics_server_chart_version` |
+| GPU + monitoring | `nvidia_device_plugin_version`, `nvidia_device_plugin_chart_version`, `nvidia_dcgm_exporter_version`, `dcgm_exporter_chart_version`, `kube_prometheus_stack_chart_version`, `enable_grafana`, `grafana_version`, `prometheus_retention`, `prometheus_memory_limit`, `enable_container_insights`, `metrics_server_chart_version` |
 | Autoscaling operators | `keda_chart_version`, `kro_chart_version` |
 | Batch / multi-node | `enable_lws`, `lws_chart_version`, `enable_kueue`, `kueue_chart_version`, `kueue_cluster_queue_name`, `gpu_g_capacity`, `gpu_p_capacity`, `kueue_gpu_lending_limit`, `enable_efa`, `efa_device_plugin_chart_version`, `efa_device_plugin_image_tag` |
 | Storage / images | `mountpoint_s3_csi_version`, `common_images`, `workload_namespace` |
@@ -163,7 +165,7 @@ project for descriptions and recommended values. Grouped by concern:
 | `image_build_codebuild_project` / `image_build_input_s3_uri` | CodeBuild project that builds a consumer-uploaded source dir into a workload/* ECR image, + the S3 prefix to upload source to |
 | `ecr_registry` / `workload_repo_prefix` | ECR registry + workload repo prefix |
 | `trusted_upstream_registries` | Registries the onboarder may pull from |
-| `*_ecr_repository` | Vendored-image ECR repos (KEDA, Grafana, DCGM, device-plugin) |
+| `*_ecr_repository` | Vendored-image ECR repos (KEDA, DCGM, device-plugin; Grafana only when it is enabled) |
 | `vendored_image_tag` | Tag applied to vendored images |
 | `starter_rgd_names` | KRO ResourceGraphDefinition starter names |
 | `*_namespace` | Namespaces for the installed platform components |
@@ -174,6 +176,38 @@ project for descriptions and recommended values. Grouped by concern:
 | `fsx_data_repository_path` | S3 URI the FSx `/models` mount is linked to via the DRA (empty when disabled) |
 
 Run `jd show --outputs --list` for the complete list.
+
+## External Dependencies
+
+This package depends on and may incorporate or retrieve a number of third-party
+software packages (such as open source packages) at install-time or build-time
+or run-time ("External Dependencies"). The External Dependencies are subject to
+license terms that you must accept in order to use this package. If you do not
+accept all of the applicable license terms, you should not use this package. We
+recommend that you consult your company’s open source approval policy before
+proceeding.
+
+Provided below is a list of External Dependencies and the applicable license
+identification as indicated by the documentation associated with the External
+Dependencies as of Amazon's most recent review.
+
+THIS INFORMATION IS PROVIDED FOR CONVENIENCE ONLY. AMAZON DOES NOT PROMISE THAT
+THE LIST OR THE APPLICABLE TERMS AND CONDITIONS ARE COMPLETE, ACCURATE, OR
+UP-TO-DATE, AND AMAZON WILL HAVE NO LIABILITY FOR ANY INACCURACIES. YOU SHOULD
+CONSULT THE DOWNLOAD SITES FOR THE EXTERNAL DEPENDENCIES FOR THE MOST COMPLETE
+AND UP-TO-DATE LICENSING INFORMATION.
+
+YOUR USE OF THE EXTERNAL DEPENDENCIES IS AT YOUR SOLE RISK. IN NO EVENT WILL
+AMAZON BE LIABLE FOR ANY DAMAGES, INCLUDING WITHOUT LIMITATION ANY DIRECT,
+INDIRECT, CONSEQUENTIAL, SPECIAL, INCIDENTAL, OR PUNITIVE DAMAGES (INCLUDING
+FOR ANY LOSS OF GOODWILL, BUSINESS INTERRUPTION, LOST PROFITS OR DATA, OR
+COMPUTER FAILURE OR MALFUNCTION) ARISING FROM OR RELATING TO THE EXTERNAL
+DEPENDENCIES, HOWEVER CAUSED AND REGARDLESS OF THE THEORY OF LIABILITY, EVEN
+IF AMAZON HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES. THESE LIMITATIONS
+AND DISCLAIMERS APPLY EXCEPT TO THE EXTENT PROHIBITED BY APPLICABLE LAW.
+
+- Grafana (AGPL-3.0) — https://github.com/grafana/grafana — only deployed when
+  `enable_grafana = true` (off by default).
 
 ## License
 

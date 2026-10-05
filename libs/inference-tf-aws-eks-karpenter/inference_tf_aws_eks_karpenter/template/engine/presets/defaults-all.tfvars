@@ -42,6 +42,7 @@ mountpoint_s3_csi_version = "v2.7.0-eksbuild.1"
 kube_prometheus_stack_chart_version = "88.1.5"
 dcgm_exporter_chart_version         = "4.8.3"
 nvidia_dcgm_exporter_version        = "4.6.0-4.8.3-distroless"
+enable_grafana                      = false    # opt-in: Grafana is AGPL-3.0 (see README External Dependencies)
 grafana_version                     = "13.1.2" # must match the chart's Grafana appVersion
 prometheus_retention                = "15d"
 prometheus_memory_limit             = "6Gi"
