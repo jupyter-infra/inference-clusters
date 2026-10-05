@@ -180,13 +180,6 @@ locals {
       repo   = "gpu/dcgm-exporter"
       source = "nvcr.io/nvidia/k8s/dcgm-exporter:${var.nvidia_dcgm_exporter_version}"
     }
-    # docker.io — Grafana publishes ONLY to Docker Hub + ghcr, neither a no-creds
-    # pull-through upstream (verified: quay.io/grafana/grafana 401s). Docker Hub
-    # allows anonymous pulls from CodeBuild's public egress, so we vendor it.
-    grafana = {
-      repo   = "vendored/grafana"
-      source = "docker.io/grafana/grafana:${var.grafana_version}"
-    }
     # ghcr.io — KEDA's three images are ghcr-only (verified: NOT on Quay (401) or
     # ECR-Public (404); the plan's "pin to quay.io/kedacore/keda" was wrong, same
     # stale-registry class as Grafana/DCGM). ghcr allows anonymous pulls from
@@ -217,7 +210,18 @@ locals {
     }
   } : {}
 
-  vendored_images = merge(local.base_vendored_images, local.efa_vendored_images)
+  # Grafana — opt-in (AGPL-3.0), merged in only when enable_grafana is true.
+  # docker.io — Grafana publishes ONLY to Docker Hub + ghcr, neither a no-creds
+  # pull-through upstream (verified: quay.io/grafana/grafana 401s). Docker Hub
+  # allows anonymous pulls from CodeBuild's public egress, so we vendor it.
+  grafana_vendored_images = var.enable_grafana ? {
+    grafana = {
+      repo   = "vendored/grafana"
+      source = "docker.io/grafana/grafana:${var.grafana_version}"
+    }
+  } : {}
+
+  vendored_images = merge(local.base_vendored_images, local.efa_vendored_images, local.grafana_vendored_images)
 
   vendored_tag = "vendored"
 }

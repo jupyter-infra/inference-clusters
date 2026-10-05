@@ -95,6 +95,8 @@ resource "helm_release" "kube_prometheus_stack" {
 
     # --- Grafana: repin docker.io -> quay; sidecar already quay; system NG ---
     grafana = {
+      # Opt-in (AGPL-3.0): see enable_grafana. Disabled = no Grafana Deployment.
+      enabled      = var.enable_grafana
       nodeSelector = local.system_node_selector
       tolerations  = [local.system_toleration]
       image = {
@@ -102,7 +104,7 @@ resource "helm_release" "kube_prometheus_stack" {
         # We vendored to our ECR via CodeBuild. The subchart builds "<registry>/<repository>",
         # so split our ECR ref: registry = the ECR host, repository = the repo path.
         registry   = local.ecr_registry
-        repository = aws_ecr_repository.vendored["grafana"].name
+        repository = var.enable_grafana ? aws_ecr_repository.vendored["grafana"].name : ""
         tag        = local.vendored_tag
       }
       sidecar = {

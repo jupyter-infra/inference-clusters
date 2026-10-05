@@ -76,11 +76,11 @@ def test_health_cluster_layer(e2e_deployment: EndToEndDeployment) -> None:
 _GPU_DAEMONSET_COMPONENTS = {"dcgm-exporter", "nvidia-device-plugin"}
 
 # Opt-in components: only deployed when the matching `enable_*` var is true. On a default
-# cluster (enable_lws / enable_fsx = false) these have no Deployment/DaemonSet, so
-# `jd health` reports them as degraded — the correct signal so a track requiring
+# cluster (enable_lws / enable_fsx / enable_grafana = false) these have no Deployment/DaemonSet,
+# so `jd health` reports them as degraded — the correct signal so a track requiring
 # `platform: [lws|fsx]` can fail preflight loudly. Accept degraded (or healthy if the
 # cluster HAS enabled them); do NOT demand healthy.
-_OPTIN_COMPONENTS = {"lws", "fsx", "fsx-csi-node"}
+_OPTIN_COMPONENTS = {"lws", "fsx", "fsx-csi-node", "grafana"}
 
 
 def _components_layers(e2e_deployment: EndToEndDeployment) -> list[dict]:
