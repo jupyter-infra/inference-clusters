@@ -1,12 +1,16 @@
 terraform {
   required_providers {
     aws = {
+      # 6.0+, not 5.0: the per-resource `region` attribute used by the ECR Public token below only
+      # exists in v6, so a mirror pinned to 5.x must fail on the version, not on an unknown attribute.
       source  = "hashicorp/aws"
-      version = ">= 5.0"
+      version = ">= 6.0"
     }
+    # 3.0+, not 2.14: the `kubernetes`/`exec` and `registries` provider attributes and the
+    # `set = [...]` list on helm_release are all v3 syntax, which v2 cannot parse.
     helm = {
       source  = "hashicorp/helm"
-      version = ">= 2.14"
+      version = ">= 3.0"
     }
     kubernetes = {
       source  = "hashicorp/kubernetes"
@@ -27,6 +31,25 @@ provider "aws" {
   region = var.region
 }
 
+# Authenticates the Karpenter chart pull from oci://public.ecr.aws (platform_karpenter.tf), the only
+# public.ecr.aws chart source in this template. Anonymous pulls share a 500 GB/month non-adjustable
+# ECR Public quota keyed on source IP, which CI runners exhaust for reasons unrelated to us -- a plan
+# then dies on `429 toomanyrequests: Data limit exceeded`. Authenticating moves us to a per-account
+# quota and 10 pulls/s instead of 1. Ported from jupyter-infra/jupyter-deploy#412 (issue #411).
+#
+# Provider-level `registries`, NOT `repository_password` on the helm_release: provider config is not
+# resource state, so a fresh token per run does not diff the release (the perpetual-diff trap that
+# made this template anonymous in 2026-07). Being a data source, the 12h token is re-read each run
+# and cannot go stale.
+#
+# Commercial partition only: ECR Public is served from us-east-1 and us-west-2 alone, so aws-us-gov
+# and aws-cn skip the token and keep the anonymous pull. `region` here rather than a second aliased
+# provider -- an aliased provider is configured whenever referenced, even at count = 0.
+data "aws_ecrpublic_authorization_token" "public_ecr" {
+  count  = data.aws_partition.current.partition == "aws" ? 1 : 0
+  region = "us-east-1"
+}
+
 provider "kubernetes" {
   host                   = module.eks_cluster.cluster_endpoint
   cluster_ca_certificate = base64decode(module.eks_cluster.cluster_ca_certificate)
@@ -38,6 +61,16 @@ provider "kubernetes" {
 }
 
 provider "helm" {
+  # Empty outside the commercial partition, which leaves the pull anonymous. A comprehension over the
+  # count-ed token yields [] when it has no instances, so there is no index to fall out of range.
+  registries = [
+    for token in data.aws_ecrpublic_authorization_token.public_ecr : {
+      url      = "oci://public.ecr.aws"
+      username = token.user_name
+      password = token.password
+    }
+  ]
+
   kubernetes = {
     host                   = module.eks_cluster.cluster_endpoint
     cluster_ca_certificate = base64decode(module.eks_cluster.cluster_ca_certificate)

@@ -93,7 +93,9 @@ resource "helm_release" "karpenter" {
   version    = var.karpenter_version
   namespace  = local.karpenter_namespace
 
-  # NO chart-pull auth: public.ecr.aws serves the Karpenter CHART anonymously.
+  # NO chart-pull credentials ON THIS RESOURCE: a per-run token here diffs the release every
+  # apply. The pull is authenticated at the helm provider instead (`registries` in main.tf)
+  # to avoid the ECR Public anonymous quota.
   # Explicit image pin to the pull-through URI (PRIMARY resolution).
   # Pin tag AND clear the chart's default digest: a repository@sha256 ref forces
   # that exact upstream digest, which pull-through has NOT imported (import is
