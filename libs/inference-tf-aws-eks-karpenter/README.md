@@ -120,7 +120,12 @@ This project:
 | Name | Version |
 |---|---|
 | terraform | >= 1.5 |
-| aws | ~> 5.0 |
+| aws | >= 6.0 |
+| helm | >= 3.0 |
+
+The deploying identity also needs `ecr-public:GetAuthorizationToken` and
+`sts:GetServiceBearerToken` (commercial partition): the Karpenter chart is pulled from
+`public.ecr.aws` with an authenticated token to avoid the anonymous-pull rate limit.
 
 ## Inputs
 

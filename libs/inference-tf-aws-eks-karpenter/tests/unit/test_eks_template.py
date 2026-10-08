@@ -362,16 +362,21 @@ def test_platform_images_pinned_or_vendored() -> None:
     assert "registry-k8s/autoscaling/cluster-autoscaler" in ca, "CA image must pin the registry-k8s pull-through URI"
 
 
-def test_karpenter_chart_pull_is_unauthenticated() -> None:
-    """The Karpenter helm_release MUST NOT set chart-pull auth.
+def test_karpenter_chart_pull_auth_is_provider_level() -> None:
+    """Karpenter chart-pull auth MUST live on the helm provider, never on the helm_release.
 
-    public.ecr.aws serves the chart anonymously; a minted token → perpetual diff → the
-    release UPDATEs every apply → recreated drain poller wipes NodePools; and the token
-    goes stale + 403s the refresh. (Diagnosed live 2026-07-04.)
+    A minted token on the release (repository_username/password) → perpetual diff → the
+    release UPDATEs every apply → recreated drain poller wipes NodePools; and the token goes
+    stale + 403s the refresh (diagnosed live 2026-07-04). The provider's `registries` is not
+    resource state and the token data source is re-read each run, so it has neither problem
+    while avoiding the anonymous ECR Public quota (jupyter-deploy#411).
     """
     block = _resource((ENGINE / "platform_karpenter.tf").read_text(), "helm_release", "karpenter")
     assert "repository_password" not in block and "repository_username" not in block
-    assert "aws_ecrpublic_authorization_token" not in (ENGINE / "main.tf").read_text()
+    main = (ENGINE / "main.tf").read_text()
+    assert 'data "aws_ecrpublic_authorization_token" "public_ecr"' in main
+    assert 'data.aws_partition.current.partition == "aws"' in main, "token must be commercial-partition only"
+    assert "registries" in main and 'url      = "oci://public.ecr.aws"' in main
 
 
 # --- Security-scoped IAM + air-gap Karpenter specifics ---
