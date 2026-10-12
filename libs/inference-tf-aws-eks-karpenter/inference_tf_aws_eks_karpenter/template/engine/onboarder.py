@@ -57,6 +57,11 @@ Env (all required unless noted):
   SKOPEO_EXTRA      extra skopeo args (tests set --dest-tls-verify=false etc.); optional
   DRY_RUN_COPY      "true" => skip the actual skopeo/s5cmd/ecr writes, still resolve
                     digests via `skopeo inspect` and emit the artifact; optional
+  HF_TOKEN_SECRET_ARN  ARN (or name) of a Secrets Manager secret whose plaintext value is a
+                    Hugging Face token, for downloading GATED hf:// models/weights; optional.
+                    Unset => anonymous (public repos only). The token is fetched at runtime and
+                    passed straight to snapshot_download(token=...) — it is never exported to the
+                    process environment (so child processes don't inherit it) nor logged.
 """
 
 from __future__ import annotations
@@ -72,7 +77,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import boto3
 import yaml
@@ -104,6 +109,10 @@ _S3_MAX_CONCURRENT_FILES = 16
 # cross-account buckets grant GetObject but not the copy). We fall back to byte-streaming
 # for that one object; JumpStart/public + same-account sources never hit this.
 _S3_COPY_REFUSED_CODES = frozenset({"AccessDenied", "InvalidRequest", "NotImplemented"})
+
+# Sentinel distinguishing "HF token not yet fetched" from "fetched, and it is None"
+# (no HF_TOKEN_SECRET_ARN set) so the Secrets Manager call happens at most once.
+_UNSET = object()
 
 
 def log(msg: str) -> None:
@@ -286,6 +295,9 @@ class Runner:
         self.skopeo_extra = [a for a in skopeo_extra.split() if a]
         self._s3_client: Any = None
         self._codebuild_client: Any = None
+        self._secrets_client: Any = None
+        # Cached HF token (see _hf_token); _UNSET until first fetch so we call Secrets Manager once.
+        self._hf_token_value: Any = _UNSET
 
     @property
     def codebuild_client(self) -> Any:
@@ -318,6 +330,28 @@ class Runner:
                 ),
             )
         return self._s3_client
+
+    @property
+    def secrets_client(self) -> Any:
+        """boto3 Secrets Manager client, built lazily on first gated hf:// download so the
+        dry-run and pure-core unit tests never construct one (and never need AWS creds)."""
+        if self._secrets_client is None:
+            region = os.environ["AWS_DEFAULT_REGION"]
+            self._secrets_client = boto3.client("secretsmanager", region_name=region)
+        return self._secrets_client
+
+    def _hf_token(self) -> str | None:
+        """Resolve the Hugging Face token for gated hf:// downloads, or None for anonymous.
+
+        When HF_TOKEN_SECRET_ARN is set, fetch the secret's plaintext value from Secrets
+        Manager ONCE (cached across a multi-weight chart) and return it; the caller passes it
+        directly to snapshot_download(token=...). We deliberately do NOT export it as an env
+        var (HF_TOKEN), so it never leaks into child-process environments or the build logs.
+        Unset => None => huggingface_hub downloads anonymously (public repos only)."""
+        if self._hf_token_value is _UNSET:
+            arn = os.environ.get("HF_TOKEN_SECRET_ARN") or ""
+            self._hf_token_value = self.secrets_client.get_secret_value(SecretId=arn)["SecretString"] if arn else None
+        return cast("str | None", self._hf_token_value)
 
     def resolve_digest(self, src_ref: str) -> str:
         """Resolve the immutable digest from the source manifest (read-only; runs even
@@ -466,10 +500,12 @@ class Runner:
         elif source.startswith("hf://"):
             repo_id, separator, revision = source[len("hf://") :].partition("@")
             stage = f"/tmp/hf/{name}"
+            # token is None for public repos; for GATED repos it is fetched from Secrets
+            # Manager (HF_TOKEN_SECRET_ARN) and passed straight here — never via the env.
             if separator:
-                snapshot_download(repo_id=repo_id, revision=revision, local_dir=stage)
+                snapshot_download(repo_id=repo_id, revision=revision, local_dir=stage, token=self._hf_token())
             else:
-                snapshot_download(repo_id=repo_id, local_dir=stage)
+                snapshot_download(repo_id=repo_id, local_dir=stage, token=self._hf_token())
             subprocess.run(["s5cmd", "cp", f"{stage}/", f"{dst_uri}/"], check=True)
         else:
             raise SystemExit(f"[onboard] ERROR: unsupported weight source {source!r} (want hf:// or s3://)")
