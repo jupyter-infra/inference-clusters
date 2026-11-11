@@ -28,6 +28,11 @@ overrides:
   # common_images: []
   # enable_grafana: false   # opt-in, AGPL-3.0 (see README External Dependencies)
   # enable_fsx: false
+  # enable_hyperpod_inference_gateway: false   # opt-in; mutually exclusive with enable_inference_routing
+  # hyperpod_inference_addon_version: "v2.1.0-eksbuild.1"
+  # hyperpod_cluster_arn: ""
+  # hyperpod_inference_gateway_schedulers:
+  #   - { name: default, model_name: default, target_port: 8000 }
   # fsx_storage_capacity_gib: 4800
   # fsx_per_unit_storage_throughput: 0     # 0 = auto (500 if P-pool on, else 250)
   # fsx_imported_file_chunk_size_mib: 16

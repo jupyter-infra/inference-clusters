@@ -1,0 +1,49 @@
+# Injected from Terraform (platform_hyperpod_gateway.tf). Defaults are placeholders so
+# `helm template` renders standalone for linting / unit tests.
+
+# -- Name of the InferenceGatewayConfig (one IGC == one Envoy Gateway endpoint).
+gatewayName: inference-gateway
+
+# -- Pod label a model Deployment carries to be routed by a scheduler: a pod labeled
+#    `<schedulerLabel>: <scheduler name>` joins that scheduler's InferencePool.
+schedulerLabel: inference/gateway-scheduler
+
+# -- One Endpoint Picker (llm-d) per entry. `modelName` is matched against the OpenAI
+#    request body `model` field by the Body-Based Router, so the model server must serve
+#    under exactly that name (vLLM --served-model-name). At least one is required by the CRD.
+schedulers:
+  - name: default
+    modelName: default
+    targetPort: 8000
+
+# -- Placement applied to the BBR + EPP pods the gateway controller generates.
+podDefaults: {}
+
+# -- Namespace the add-on runs the gateway controller + BBR in (fixed by the add-on).
+gatewayNamespace: hyperpod-inference-system
+
+# -- Labels the kube-prometheus-stack Prometheus selects ServiceMonitors/PodMonitors by.
+serviceMonitorLabel:
+  release: kube-prometheus-stack
+
+# -- Prometheus scrape of the gateway's own metrics (BBR + per-scheduler EPP). The pod
+#    selectors / port names are the ones the add-on's gateway controller stamps on the
+#    pods it generates (verified live). EPP /metrics is authn/authz-protected (TokenReview
+#    + SubjectAccessReview), so Prometheus presents its own service-account token; its
+#    kube-prometheus-stack ClusterRole already grants `get` on the /metrics non-resource URL.
+scrape:
+  enabled: true
+  interval: 15s
+  epp:
+    selector:
+      matchExpressions:
+        - {key: inferencepool, operator: Exists}
+    port: http-metrics
+  bbr:
+    selector:
+      matchExpressions:
+        - {key: app, operator: In, values: [body-based-router]}
+    port: http-metrics
+
+# -- sha256 of the chart's files; presence forces a helm upgrade when a template changes.
+chartContentHash: ""

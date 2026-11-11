@@ -1,0 +1,10 @@
+apiVersion: v2
+name: hyperpod-gateway
+# SemVer spelling of the template version 0.1.0rc1 (Helm requires SemVer).
+# Kept in sync with the template version.
+version: 0.1.0-rc1
+description: >-
+  First-party chart: the default SageMaker HyperPod InferenceGatewayConfig (Envoy Gateway ->
+  Body-Based Router -> llm-d Endpoint Picker) plus the Prometheus scrape objects for the
+  gateway's BBR / EPP metrics. Requires the amazon-sagemaker-hyperpod-inference EKS add-on.
+type: application

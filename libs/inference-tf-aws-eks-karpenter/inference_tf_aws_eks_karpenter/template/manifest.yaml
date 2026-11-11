@@ -835,6 +835,52 @@ components:
         method: k8s.apps.get-daemonset-status
       show:
         method: k8s.apps.get-daemonset
+  # Opt-in (enable_hyperpod_inference_gateway): the SageMaker HyperPod Inference add-on's
+  # operator + gateway controller, and the cert-manager add-on they depend on. Same
+  # degraded-when-disabled semantics as lws/fsx above: a track that requires the gateway
+  # fails preflight on a cluster that has not enabled it.
+  hyperpod-inference-operator:
+    type: Deployment
+    description: SageMaker HyperPod Inference operator (InferenceEndpointConfig / JumpStartModel; opt-in)
+    resource-name: hyperpod-inference-controller-manager
+    scope: hyperpod_inference_namespace
+    verbs:
+      status:
+        method: k8s.apps.get-deployment-status
+      show:
+        method: k8s.apps.get-deployment
+      logs:
+        method: k8s.core.deployment-logs
+      restart:
+        method: k8s.apps.rollout-restart
+  hyperpod-inference-gateway:
+    type: Deployment
+    description: SageMaker HyperPod Inference Gateway controller (Envoy Gateway + BBR + EPP; opt-in)
+    resource-name: inference-gateway-controller
+    scope: hyperpod_inference_namespace
+    verbs:
+      status:
+        method: k8s.apps.get-deployment-status
+      show:
+        method: k8s.apps.get-deployment
+      logs:
+        method: k8s.core.deployment-logs
+      restart:
+        method: k8s.apps.rollout-restart
+  cert-manager:
+    type: Deployment
+    description: cert-manager (TLS certificates for the HyperPod Inference add-on; opt-in)
+    resource-name: cert-manager
+    scope: cert_manager_namespace
+    verbs:
+      status:
+        method: k8s.apps.get-deployment-status
+      show:
+        method: k8s.apps.get-deployment
+      logs:
+        method: k8s.core.deployment-logs
+      restart:
+        method: k8s.apps.rollout-restart
 # --- jd health: vendored platform images ---
 # Confirms each image the template vendors to ECR (the air-gapped failure mode) is present.
 # Workload/* images (chart-onboarded at runtime) are excluded — not known at template time.

@@ -72,6 +72,9 @@ resource "helm_release" "kro_starters" {
   set = [
     { name = "karpenterGpuNodeSelector", value = "nvidia-g" },
     { name = "serviceMonitorLabel", value = "kube-prometheus-stack" },
+    # The HyperPod Inference Gateway scheduler label (platform_hyperpod_gateway.tf), so the
+    # starter's `gatewayScheduler` field attaches its pods to the default gateway.
+    { name = "gatewaySchedulerLabel", value = local.hyperpod_gateway_scheduler_label },
     # Chart content hash so editing a chart file triggers a re-apply (see main.tf).
     { name = "chartContentHash", value = local.chart_hashes["kro"] },
   ]

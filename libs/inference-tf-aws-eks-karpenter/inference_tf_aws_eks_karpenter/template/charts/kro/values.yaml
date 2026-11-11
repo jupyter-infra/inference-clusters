@@ -8,3 +8,7 @@ karpenterGpuNodeSelector: nvidia-g
 # -- The label the kube-prometheus-stack Prometheus selects ServiceMonitors by, so
 #    the starter's ServiceMonitor is scraped (release: <prometheus release name>).
 serviceMonitorLabel: kube-prometheus-stack
+
+# -- Pod label key the HyperPod Inference Gateway's default InferenceGatewayConfig
+#    schedulers select model pods by (platform_hyperpod_gateway.tf).
+gatewaySchedulerLabel: inference/gateway-scheduler
