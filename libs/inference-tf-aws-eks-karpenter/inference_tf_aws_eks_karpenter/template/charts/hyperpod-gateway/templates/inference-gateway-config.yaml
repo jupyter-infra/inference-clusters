@@ -1,0 +1,62 @@
+{{- /*
+The default InferenceGatewayConfig: ONE gateway endpoint for the workload namespace.
+
+Request path: client -> Envoy Gateway (one Service per IGC) -> Body-Based Router (reads
+the OpenAI body `model`, sets X-Gateway-Model-Name) -> HTTPRoute header match -> the
+scheduler's InferencePool -> llm-d Endpoint Picker picks a pod (queue / KV-cache / prefix).
+
+Scheduler template (the KRO-track contract): each entry selects the model pods labeled
+`<schedulerLabel>: <name>` in THIS namespace, and routes requests whose body `model`
+equals `modelName`. A KRO track (or any Deployment) attaches by stamping that label on its
+pod template and serving under `modelName` — see the starter InferenceDeployment RGD's
+`gatewayScheduler` field (charts/kro).
+
+TLS is mandatory in the CRD (no HTTP-only mode). `tls: {}` = auto-issue: the gateway
+controller issues a self-signed certificate with cert-manager and imports it into ACM
+(through its IRSA role + the acm VPC endpoint). Set tls.acmArn to bring your own.
+*/ -}}
+{{- if not .Values.schedulers }}
+{{- fail "hyperpod-gateway: at least one scheduler is required (InferenceGatewayConfig spec.schedulers minItems=1)" }}
+{{- end }}
+{{- $seen := dict }}
+{{- range .Values.schedulers }}
+{{- if hasKey $seen .modelName }}
+{{- fail (printf "hyperpod-gateway: duplicate scheduler modelName %q (must be unique)" .modelName) }}
+{{- end }}
+{{- $_ := set $seen .modelName true }}
+{{- end }}
+apiVersion: inference.sagemaker.aws.amazon.com/v1alpha1
+kind: InferenceGatewayConfig
+metadata:
+  name: {{ .Values.gatewayName }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  bbr:
+    # Required when >1 scheduler; on by default so adding a model never flips it.
+    enabled: true
+  tls:
+    {{- with .Values.tls.acmArn }}
+    acmArn: {{ . | quote }}
+    {{- else }} {}
+    {{- end }}
+  observability:
+    metrics:
+      # No OTel sidecar: it forwards to the HyperPod-managed observability stack (AMP),
+      # which this template does not provision. BBR/EPP still expose /metrics, scraped by
+      # the in-cluster kube-prometheus-stack (servicemonitors.yaml).
+      enabled: false
+  {{- with .Values.podDefaults }}
+  podDefaults:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  schedulers:
+    {{- range .Values.schedulers }}
+    - name: {{ .name }}
+      modelName: {{ .modelName | quote }}
+      modelSelector:
+        matchLabels:
+          {{ $.Values.schedulerLabel }}: {{ .name | quote }}
+      targetPort: {{ .targetPort | default 8000 }}
+      scheduler: llm-d
+      engineType: vllm
+    {{- end }}

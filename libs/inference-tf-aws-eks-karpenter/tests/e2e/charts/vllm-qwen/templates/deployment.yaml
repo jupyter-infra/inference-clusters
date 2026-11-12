@@ -13,6 +13,9 @@ spec:
     metadata:
       labels:
         app: {{ .Release.Name }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       # GPU placement: land on the Karpenter gpu-g NodePool. The pod pends until
       # Karpenter provisions a node — that IS segment 3 of the autoscaling chain.

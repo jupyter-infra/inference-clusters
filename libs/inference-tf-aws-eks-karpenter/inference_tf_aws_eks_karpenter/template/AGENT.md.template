@@ -279,4 +279,33 @@ the pool definition is inert until a pod opts in).
   default: for elastic on-demand P, backfilling pins the node up and blocks
   consolidation, usually raising cost.
 
+## SageMaker HyperPod Inference Gateway (opt-in)
+
+Enabled by `enable_hyperpod_inference_gateway: true` (off by default; mutually exclusive with
+`enable_inference_routing`). It installs the `amazon-sagemaker-hyperpod-inference` EKS add-on
+(operator + gateway, namespace `hyperpod-inference-system`), the `cert-manager` add-on, IRSA
+roles (this add-on does not support Pod Identity), and a default `InferenceGatewayConfig`
+named `inference-gateway` in the workload namespace.
+
+Request path: Envoy Gateway -> Body-Based Router (reads the OpenAI body `model`) -> the
+scheduler whose `model_name` matches -> its llm-d Endpoint Picker -> a model pod.
+
+To put a model behind the gateway:
+- add a scheduler to `hyperpod_inference_gateway_schedulers` (`name`, `model_name`,
+  `target_port`) and re-run `jd config` + `jd up`, or reuse the `default` one;
+- label the model pods `inference/gateway-scheduler: <scheduler name>` (the KRO starter
+  `InferenceDeployment` sets it from `spec.gatewayScheduler`);
+- serve under exactly `model_name` (vLLM `--served-model-name`), on `target_port`.
+
+Checks:
+- `aws eks describe-addon --cluster-name <cluster> --addon-name amazon-sagemaker-hyperpod-inference`
+  -> `ACTIVE`, no health issues;
+- `kubectl get inferencegatewayconfig -n <workload namespace>` -> the `Ready` condition;
+- `jd health --components` -> `hyperpod-inference-operator`, `hyperpod-inference-gateway`,
+  `cert-manager` (these read degraded on clusters that have not enabled the gateway — expected).
+
+The gateway has no request authentication by default (`spec.auth.jwt` on the
+`InferenceGatewayConfig` enables it); access is bounded by the VPC. Do not edit the
+generated InferencePool / HTTPRoute / EPP objects: the gateway controller owns them.
+
 {{ generated-by-footer }}

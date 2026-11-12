@@ -1,0 +1,63 @@
+# Injected from Terraform (platform_hyperpod_gateway.tf). Defaults are placeholders so
+# `helm template` renders standalone for linting / unit tests.
+
+# -- Name of the InferenceGatewayConfig (one IGC == one Envoy Gateway endpoint).
+gatewayName: inference-gateway
+
+# -- Pod label a model Deployment carries to be routed by a scheduler: a pod labeled
+#    `<schedulerLabel>: <scheduler name>` joins that scheduler's InferencePool.
+schedulerLabel: inference/gateway-scheduler
+
+# -- One Endpoint Picker (llm-d) per entry. `modelName` is matched against the OpenAI
+#    request body `model` field by the Body-Based Router, so the model server must serve
+#    under exactly that name (vLLM --served-model-name). At least one is required by the CRD.
+schedulers:
+  - name: default
+    modelName: default
+    targetPort: 8000
+
+# -- TLS termination (required by the CRD). Empty acmArn = auto-issue (cert-manager ->
+#    ACM import); set an ACM certificate ARN to bring your own.
+tls:
+  acmArn: ""
+
+# -- Placement + sizing applied to the BBR + EPP pods the gateway controller generates.
+#    Without resources the EPP requests 4 CPU / 8Gi per replica and cannot fit the system NG.
+podDefaults: {}
+
+# -- Namespace the add-on runs the gateway controller + BBR in (fixed by the add-on).
+gatewayNamespace: hyperpod-inference-system
+
+# -- Namespace the in-cluster Prometheus runs in (admitted to the EPP /metrics port).
+monitoringNamespace: monitoring
+
+# -- Labels the kube-prometheus-stack Prometheus selects ServiceMonitors/PodMonitors by.
+serviceMonitorLabel:
+  release: kube-prometheus-stack
+
+# -- Prometheus scrape of the gateway's own metrics (BBR + per-scheduler EPP). Selectors and
+#    ports are the ones the add-on's gateway controller stamps on the pods it generates
+#    (verified live on v2.1.0-eksbuild.1): EPP pods carry
+#    inference.sagemaker.aws.amazon.com/scheduler=<name> and a `metrics` port (9090); BBR pods
+#    carry app=inference-gateway-bbr and serve /metrics on 9090, a port the container does NOT
+#    declare (only grpc 9004 / health 9005): the PodMonitor anchors on the declared grpc port
+#    and rewrites the target address to <podIP>:<metricsPort>, since portNumber alone only
+#    matches declared ports and the target would be dropped (verified live). Both run with
+#    --metrics-endpoint-auth=false, so no bearer token is needed.
+scrape:
+  enabled: true
+  interval: 15s
+  epp:
+    selector:
+      matchExpressions:
+        - {key: inference.sagemaker.aws.amazon.com/scheduler, operator: Exists}
+    port: metrics
+  bbr:
+    selector:
+      matchLabels:
+        app: inference-gateway-bbr
+    declaredPort: 9004
+    metricsPort: 9090
+
+# -- sha256 of the chart's files; presence forces a helm upgrade when a template changes.
+chartContentHash: ""

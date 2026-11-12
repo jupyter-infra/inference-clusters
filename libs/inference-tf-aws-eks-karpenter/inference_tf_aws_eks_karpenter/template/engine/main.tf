@@ -91,7 +91,7 @@ locals {
   # matters. Content-only hash (each file's sha256, ordered by path) — deterministic
   # across environments, unlike archive_file md5 (same idiom as eks-oidc's application
   # module). fileset("**") walks recursively; sort() keeps the join order stable.
-  chart_dirs = ["karpenter", "kro", "kueue", "metrics", "storage", "inference-extension"]
+  chart_dirs = ["karpenter", "kro", "kueue", "metrics", "storage", "inference-extension", "hyperpod-gateway"]
   chart_hashes = {
     for name in local.chart_dirs :
     name => sha256(join("", [

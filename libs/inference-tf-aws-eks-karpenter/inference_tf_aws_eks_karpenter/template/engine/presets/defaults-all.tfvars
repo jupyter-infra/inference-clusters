@@ -63,6 +63,17 @@ kro_chart_version  = "0.9.3"
 # chart. See platform_inference_ext.tf.
 enable_inference_routing = false
 
+# --- SageMaker HyperPod Inference Gateway (opt-in, off by default) ---
+# amazon-sagemaker-hyperpod-inference EKS add-on (operator + gateway) + cert-manager +
+# IRSA roles + a default InferenceGatewayConfig. Mutually exclusive with
+# enable_inference_routing. See platform_hyperpod_gateway.tf.
+enable_hyperpod_inference_gateway = false
+hyperpod_inference_addon_version  = "v2.1.0-eksbuild.1"
+hyperpod_cluster_arn              = "" # optional: set when a HyperPod cluster is attached
+hyperpod_inference_gateway_schedulers = [
+  { name = "default", model_name = "default", target_port = "8000" },
+]
+
 # --- Image supply: common-utility images via pull-through ---
 # Each entry MUST use a no-creds trusted upstream (public.ecr.aws/quay.io/registry.k8s.io).
 common_images = []

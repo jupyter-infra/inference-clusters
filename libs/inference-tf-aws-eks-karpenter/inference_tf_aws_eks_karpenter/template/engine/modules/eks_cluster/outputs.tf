@@ -17,3 +17,9 @@ output "cluster_arn" {
 output "cluster_security_group_id" {
   value = aws_eks_cluster.this.vpc_config[0].cluster_security_group_id
 }
+
+# OIDC issuer URL (https://oidc.eks.<region>.amazonaws.com/id/<id>). Consumed only by the
+# opt-in IRSA provider (platform_hyperpod_gateway.tf); the rest of the template uses Pod Identity.
+output "oidc_issuer_url" {
+  value = aws_eks_cluster.this.identity[0].oidc[0].issuer
+}

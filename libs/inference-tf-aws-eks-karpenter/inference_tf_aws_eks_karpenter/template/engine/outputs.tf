@@ -259,3 +259,57 @@ output "fsx_data_repository_path" {
   description = "S3 URI the /models mount is linked to via the DRA (empty when disabled)."
   value       = var.enable_fsx ? aws_fsx_data_repository_association.models[0].data_repository_path : ""
 }
+
+# --- SageMaker HyperPod Inference Gateway outputs (empty strings when disabled) ---
+
+output "hyperpod_inference_gateway_enabled" {
+  description = "Whether the SageMaker HyperPod Inference add-on + gateway are installed (\"true\"/\"false\")."
+  # tostring(): jd's output parser rejects `type: bool` (see fsx_enabled).
+  value = tostring(var.enable_hyperpod_inference_gateway)
+}
+
+output "hyperpod_inference_namespace" {
+  description = "Namespace the HyperPod Inference add-on runs its operator, gateway controller and BBR in."
+  value       = local.hyperpod_inference_namespace
+}
+
+output "cert_manager_namespace" {
+  description = "Namespace of the cert-manager add-on (installed with the HyperPod Inference Gateway)."
+  value       = "cert-manager"
+}
+
+output "hyperpod_inference_gateway_config_name" {
+  description = "Name of the default InferenceGatewayConfig in the workload namespace (empty when disabled)."
+  value       = var.enable_hyperpod_inference_gateway ? local.hyperpod_gateway_config_name : ""
+}
+
+output "hyperpod_inference_gateway_scheduler_label" {
+  description = "Pod label key a model Deployment sets to <scheduler name> to join that gateway scheduler's InferencePool."
+  value       = local.hyperpod_gateway_scheduler_label
+}
+
+output "hyperpod_inference_gateway_models" {
+  description = "Model names the default gateway routes (OpenAI body `model` values), in scheduler order (empty when disabled)."
+  value       = var.enable_hyperpod_inference_gateway ? [for s in var.hyperpod_inference_gateway_schedulers : s["model_name"]] : []
+}
+
+output "hyperpod_inference_tls_bucket" {
+  description = "S3 bucket the HyperPod Inference operator stores TLS certificates in (empty when disabled)."
+  value       = var.enable_hyperpod_inference_gateway ? module.hyperpod_tls_bucket[0].bucket_name : ""
+}
+
+output "hyperpod_inference_execution_role_arn" {
+  description = "IRSA execution role of the HyperPod Inference operator (empty when disabled)."
+  value       = var.enable_hyperpod_inference_gateway ? module.hyperpod_operator_role[0].role_arn : ""
+}
+
+output "hyperpod_inference_gateway_service_selector" {
+  description = "Label selector of the gateway's Envoy Service (namespace hyperpod_inference_namespace; plain HTTP :80 in-cluster). Empty when disabled."
+  # The controller creates the Gateway in the add-on namespace, named after the IGC; Envoy
+  # Gateway names the Service with a hash suffix, so consumers discover it by these labels:
+  #   kubectl get svc -n <hyperpod_inference_namespace> -l <this selector>
+  value = var.enable_hyperpod_inference_gateway ? join(",", [
+    "gateway.envoyproxy.io/owning-gateway-name=${local.hyperpod_gateway_config_name}",
+    "gateway.envoyproxy.io/owning-gateway-namespace=${local.hyperpod_inference_namespace}",
+  ]) : ""
+}

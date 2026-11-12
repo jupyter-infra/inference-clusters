@@ -82,7 +82,7 @@ class TemplateSpec:
 TEMPLATES: dict[str, TemplateSpec] = {
     "eks-karpenter": TemplateSpec(
         package="inference-tf-aws-eks-karpenter",
-        synced_charts=("inference-extension", "karpenter", "kro", "metrics", "storage"),
+        synced_charts=("hyperpod-gateway", "inference-extension", "karpenter", "kro", "metrics", "storage"),
     ),
 }
 

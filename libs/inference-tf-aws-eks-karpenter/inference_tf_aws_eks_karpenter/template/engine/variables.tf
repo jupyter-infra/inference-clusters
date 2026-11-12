@@ -333,6 +333,86 @@ variable "enable_inference_routing" {
   type        = bool
 }
 
+variable "enable_hyperpod_inference_gateway" {
+  description = <<-EOT
+    Whether to install the SageMaker HyperPod Inference add-on with its Inference Gateway.
+
+    Opt-in: installs the amazon-sagemaker-hyperpod-inference EKS add-on (operator +
+    gateway), cert-manager, an IAM OIDC provider + IRSA roles, a hyperpod-tls* bucket,
+    sagemaker.api/acm VPC endpoints, and a default InferenceGatewayConfig (Envoy Gateway
+    -> body-based router -> llm-d endpoint picker) in the workload namespace.
+    Mutually exclusive with enable_inference_routing (the add-on ships its own
+    InferencePool CRDs).
+
+    Recommended: false
+  EOT
+  type        = bool
+}
+
+variable "hyperpod_inference_addon_version" {
+  description = <<-EOT
+    The amazon-sagemaker-hyperpod-inference EKS add-on version.
+
+    The Inference Gateway needs v2.0.0-eksbuild.2 or later. List versions for your
+    Kubernetes version with `aws eks describe-addon-versions --addon-name
+    amazon-sagemaker-hyperpod-inference --kubernetes-version <v>`.
+
+    Recommended: v2.1.0-eksbuild.1
+  EOT
+  type        = string
+}
+
+variable "hyperpod_cluster_arn" {
+  description = <<-EOT
+    ARN of a SageMaker HyperPod cluster attached to this EKS cluster, if any.
+
+    Passed to the add-on as hyperpodClusterArn when set. Leave empty on a plain EKS
+    cluster; the add-on schema does not require it.
+
+    Recommended: ""
+  EOT
+  type        = string
+}
+
+variable "hyperpod_inference_gateway_schedulers" {
+  description = <<-EOT
+    The per-model schedulers (endpoint pickers) of the default InferenceGatewayConfig.
+
+    Each entry is a map with keys name, model_name and target_port: it routes requests
+    whose OpenAI body `model` equals model_name to the pods labeled
+    inference/gateway-scheduler=<name> in the workload namespace, on target_port.
+    At least one entry is required; model_name must be unique.
+
+    Recommended: [{ name = "default", model_name = "default", target_port = "8000" }]
+  EOT
+  # list(map(string)), not list(object(...)): jd only parses string / number / bool /
+  # list(string) / map(string) / list(map(string)) variable types.
+  type = list(map(string))
+
+  validation {
+    condition     = length(var.hyperpod_inference_gateway_schedulers) >= 1
+    error_message = "hyperpod_inference_gateway_schedulers needs at least one scheduler (InferenceGatewayConfig requires spec.schedulers)."
+  }
+
+  validation {
+    condition = alltrue([for s in var.hyperpod_inference_gateway_schedulers :
+    length(setsubtract(["name", "model_name", "target_port"], keys(s))) == 0 && can(tonumber(s["target_port"]))])
+    error_message = "each hyperpod_inference_gateway_schedulers entry needs name, model_name and a numeric target_port."
+  }
+
+  validation {
+    condition = length(distinct([for s in var.hyperpod_inference_gateway_schedulers : lookup(s, "model_name", "")])) == length(
+      var.hyperpod_inference_gateway_schedulers
+    )
+    error_message = "hyperpod_inference_gateway_schedulers model_name values must be unique."
+  }
+
+  validation {
+    condition     = alltrue([for s in var.hyperpod_inference_gateway_schedulers : can(regex("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$", lookup(s, "name", "")))])
+    error_message = "hyperpod_inference_gateway_schedulers name must be a DNS-1123 label (it names the generated InferencePool and is a pod label value)."
+  }
+}
+
 
 variable "common_images" {
   description = <<-EOT

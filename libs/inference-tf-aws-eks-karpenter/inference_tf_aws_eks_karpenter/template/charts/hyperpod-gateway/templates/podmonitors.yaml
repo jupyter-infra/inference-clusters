@@ -1,0 +1,51 @@
+{{- /*
+PodMonitors for the gateway's routing metrics, so the in-cluster kube-prometheus-stack
+Prometheus scrapes them (the add-on's own OTel path targets AMP, which this template
+does not provision). The `release` label is what that Prometheus selects on.
+
+  - EPP (one Deployment per scheduler, in THIS namespace): per-model request count /
+    latency / token counters and InferencePool aggregates (ready pods, avg KV-cache, queue).
+  - BBR (shared, in the add-on namespace): model-name extraction success/failure.
+Both serve /metrics unauthenticated (--metrics-endpoint-auth=false).
+*/ -}}
+{{- if .Values.scrape.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ .Values.gatewayName }}-epp
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml .Values.serviceMonitorLabel | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    {{- toYaml .Values.scrape.epp.selector | nindent 4 }}
+  podMetricsEndpoints:
+    - port: {{ .Values.scrape.epp.port }}
+      path: /metrics
+      interval: {{ .Values.scrape.interval }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ .Values.gatewayName }}-bbr
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml .Values.serviceMonitorLabel | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Values.gatewayNamespace }}
+  selector:
+    {{- toYaml .Values.scrape.bbr.selector | nindent 4 }}
+  podMetricsEndpoints:
+    - portNumber: {{ .Values.scrape.bbr.declaredPort }}
+      path: /metrics
+      interval: {{ .Values.scrape.interval }}
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_ip]
+          targetLabel: __address__
+          replacement: "$1:{{ .Values.scrape.bbr.metricsPort }}"
+{{- end }}

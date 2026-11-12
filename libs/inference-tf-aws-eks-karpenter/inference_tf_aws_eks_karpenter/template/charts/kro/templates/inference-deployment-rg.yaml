@@ -51,6 +51,12 @@ spec:
       scaleQuery: string | required=true
       # Scale-up threshold the query is compared against.
       scaleThreshold: string | default="70"
+      # SageMaker HyperPod Inference Gateway scheduler this workload joins (opt-in
+      # platform feature, enable_hyperpod_inference_gateway). Stamped as the pod label
+      # `{{ .Values.gatewaySchedulerLabel }}`; the default InferenceGatewayConfig's
+      # scheduler of that name routes requests whose body `model` matches its model_name
+      # to these pods. Empty = not behind the gateway (the label is inert).
+      gatewayScheduler: string | default=""
     status:
       # Surfaced back onto the InferenceDeployment CR from the child Deployment.
       availableReplicas: ${deployment.status.availableReplicas}
@@ -71,6 +77,7 @@ spec:
             metadata:
               labels:
                 app: ${schema.metadata.name}
+                {{ .Values.gatewaySchedulerLabel }}: ${schema.spec.gatewayScheduler}
             spec:
               # Land on the Karpenter GPU NodePool: the label selects GPU
               # nodes and the toleration lets the pod past the GPU taint. Baked in so
