@@ -1,0 +1,37 @@
+{{- /*
+Ingress the add-on's own per-scheduler NetworkPolicy (<scheduler>-epp-netpol) leaves out.
+
+The gateway controller stamps a NetworkPolicy on every EPP that admits ext-proc (9002) and
+/metrics (9090) only from pods in the EPP's OWN namespace. But Envoy runs in the add-on
+namespace and Prometheus in the monitoring namespace, so on a cluster that ENFORCES
+NetworkPolicy (this template enables the VPC CNI policy agent) every request through the
+gateway fails 500 `ext_proc_error_gRPC_error_14 ... connection_timeout` and the EPP is never
+scraped (verified live). NetworkPolicies are additive, so this one only widens ingress to
+exactly those two callers on exactly those two ports.
+*/ -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.gatewayName }}-epp-gateway-ingress
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: inference.sagemaker.aws.amazon.com/scheduler, operator: Exists}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.gatewayNamespace }}
+      ports:
+        - {port: 9002, protocol: TCP}
+    {{- if .Values.scrape.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.monitoringNamespace }}
+      ports:
+        - {port: 9090, protocol: TCP}
+    {{- end }}

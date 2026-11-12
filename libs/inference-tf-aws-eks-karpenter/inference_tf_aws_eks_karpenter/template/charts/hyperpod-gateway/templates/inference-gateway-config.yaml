@@ -11,9 +11,9 @@ equals `modelName`. A KRO track (or any Deployment) attaches by stamping that la
 pod template and serving under `modelName` — see the starter InferenceDeployment RGD's
 `gatewayScheduler` field (charts/kro).
 
-TLS is intentionally omitted: the gateway is an in-VPC HTTP endpoint on this
-endpoints-only cluster (no ALB / public ingress). Set spec.tls (+ an ACM ARN) to terminate
-HTTPS when you put an ALB in front of it.
+TLS is mandatory in the CRD (no HTTP-only mode). `tls: {}` = auto-issue: the gateway
+controller issues a self-signed certificate with cert-manager and imports it into ACM
+(through its IRSA role + the acm VPC endpoint). Set tls.acmArn to bring your own.
 */ -}}
 {{- if not .Values.schedulers }}
 {{- fail "hyperpod-gateway: at least one scheduler is required (InferenceGatewayConfig spec.schedulers minItems=1)" }}
@@ -34,6 +34,11 @@ spec:
   bbr:
     # Required when >1 scheduler; on by default so adding a model never flips it.
     enabled: true
+  tls:
+    {{- with .Values.tls.acmArn }}
+    acmArn: {{ . | quote }}
+    {{- else }} {}
+    {{- end }}
   observability:
     metrics:
       # No OTel sidecar: it forwards to the HyperPod-managed observability stack (AMP),

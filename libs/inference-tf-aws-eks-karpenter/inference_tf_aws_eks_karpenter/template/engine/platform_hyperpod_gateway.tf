@@ -20,15 +20,20 @@
 #     named hyperpod-tls-<postfix>-* because the AWS-managed execution policy
 #     (AmazonSageMakerHyperPodInferenceAccess) only grants S3 on `hyperpod-tls*` buckets.
 #   - cert-manager (the operator's webhook certs + the gateway's TLS auto-issue path).
+#   - the FSx CSIDriver + the AWS Load Balancer Controller CRDs: the operator's
+#     `check-csi-drivers` init container hard-requires fsx.csi.aws.com, s3.csi.aws.com and
+#     the elbv2.k8s.aws / keda.sh / cert-manager.io CRDs and crash-loops without them
+#     (verified live). FSx comes from the aws-fsx-csi-driver add-on unless enable_fsx already
+#     installs the driver; the ALB CRDs come from the add-on's own bundled ALB controller.
 #   - extra interface endpoints on the endpoints-only VPC: sagemaker.api (operator ->
 #     SageMaker endpoint registration / HyperPod describe) and acm (TLS import).
 #
-# Deliberately DISABLED add-on sub-components:
+# Deliberately DISABLED add-on sub-component:
 #   - keda: the template already installs KEDA (platform_keda.tf) cluster-wide; a second
 #     KEDA would fight over the keda.sh CRDs and the external-metrics APIService.
-#   - alb:  the AWS Load Balancer Controller is not part of this template; the gateway is
-#     reached in-VPC through its Envoy Service (see outputs). Opting into an ALB endpoint
-#     type is a follow-up, not a default.
+# The bundled ALB controller stays ON (the operator requires its CRDs) but nothing here
+# creates an Ingress, so it provisions no load balancer; the gateway is reached in-VPC
+# through its Envoy Service (see outputs).
 
 locals {
   hyperpod_gw_enabled = var.enable_hyperpod_inference_gateway
@@ -38,6 +43,7 @@ locals {
   hyperpod_inference_namespace   = "hyperpod-inference-system"
   hyperpod_operator_sa           = "hyperpod-inference-controller-manager"
   hyperpod_gateway_controller_sa = "inference-gateway-controller"
+  hyperpod_alb_controller_sa     = "aws-load-balancer-controller"
 
   # The default InferenceGatewayConfig name (one IGC == one Envoy Gateway). Lives in the
   # workload namespace because each scheduler's InferencePool selects model pods in the
@@ -150,6 +156,34 @@ module "hyperpod_operator_role" {
   combined_tags      = local.combined_tags
 }
 
+# The operator calls sagemaker:UpdateClusterInference (EnableClusterInference) on the
+# attached HyperPod cluster at start-up, passing ITS OWN execution role to SageMaker. The
+# managed policy does not grant iam:PassRole, so without this the operator crash-loops with
+# AccessDenied on iam:PassRole (verified live). Least privilege: only this role, only to
+# SageMaker.
+data "aws_iam_policy_document" "hyperpod_operator_pass_role" {
+  count = local.hyperpod_gw_enabled ? 1 : 0
+
+  statement {
+    sid       = "PassOwnExecutionRoleToSageMaker"
+    actions   = ["iam:PassRole"]
+    resources = [module.hyperpod_operator_role[0].role_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["sagemaker.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "hyperpod_operator_pass_role" {
+  count = local.hyperpod_gw_enabled ? 1 : 0
+
+  name   = "${local.resource_name_prefix}-hp-inference-exec-passrole"
+  role   = module.hyperpod_operator_role[0].role_name
+  policy = data.aws_iam_policy_document.hyperpod_operator_pass_role[0].json
+}
+
 # Gateway-controller role (add-on `inferenceGateway.serviceAccount.roleArn`): ACM import/
 # tag/describe/delete for the TLS auto-issue flow. The docs require it to exist BEFORE the
 # add-on installs (the controller reads it at start-up).
@@ -161,6 +195,48 @@ module "hyperpod_gateway_controller_role" {
   assume_role_policy = data.aws_iam_policy_document.hyperpod_gateway_controller_trust[0].json
   policy_arns        = ["arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonSageMakerHyperPodInferenceGatewayAccess"]
   combined_tags      = local.combined_tags
+}
+
+data "aws_iam_policy_document" "hyperpod_alb_controller_trust" {
+  count = local.hyperpod_gw_enabled ? 1 : 0
+
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.eks[0].arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "${local.oidc_issuer_host}:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "${local.oidc_issuer_host}:sub"
+      values   = ["system:serviceaccount:${local.hyperpod_inference_namespace}:${local.hyperpod_alb_controller_sa}"]
+    }
+  }
+}
+
+# Bundled ALB controller role (add-on `alb.serviceAccount.roleArn`). The policy is the
+# AWS Load Balancer Controller policy the add-on documents (vendored verbatim from
+# aws/sagemaker-hyperpod-cli inference-operator/migration/alb-controller-policy.json).
+module "hyperpod_alb_controller_role" {
+  count = local.hyperpod_gw_enabled ? 1 : 0
+
+  source             = "./modules/iam_role"
+  role_name          = "${local.resource_name_prefix}-hp-inference-alb"
+  assume_role_policy = data.aws_iam_policy_document.hyperpod_alb_controller_trust[0].json
+  combined_tags      = local.combined_tags
+}
+
+resource "aws_iam_role_policy" "hyperpod_alb_controller" {
+  count = local.hyperpod_gw_enabled ? 1 : 0
+
+  name   = "${local.resource_name_prefix}-hp-inference-alb"
+  role   = module.hyperpod_alb_controller_role[0].role_name
+  policy = file("${path.module}/policies/hyperpod-alb-controller-policy.json")
 }
 
 # --- TLS certificate bucket (add-on `tlsCertificateS3Bucket`) ---
@@ -180,8 +256,8 @@ module "hyperpod_tls_bucket" {
 #
 # Required by the inference operator (webhook serving certs) and by the gateway's TLS
 # auto-issue path. EKS community add-on, images from the regional EKS add-on ECR (reached
-# through the existing ecr endpoints). Controller, webhook, cainjector and the startup
-# API check are control loops -> pinned to the system NG.
+# through the existing ecr endpoints). Controller, webhook and cainjector are control
+# loops -> pinned to the system NG (the add-on schema exposes no startupapicheck key).
 resource "aws_eks_addon" "cert_manager" {
   count = local.hyperpod_gw_enabled ? 1 : 0
 
@@ -200,9 +276,31 @@ resource "aws_eks_addon" "cert_manager" {
       nodeSelector = local.system_node_selector
       tolerations  = [local.system_toleration]
     }
-    startupapicheck = {
+  })
+
+  depends_on = [null_resource.cluster_addons, module.node_group]
+}
+
+# --- FSx CSI driver (dependency: the operator init check requires CSIDriver fsx.csi.aws.com) ---
+#
+# Only when enable_fsx is false — with enable_fsx the aws-fsx-csi-driver Helm release
+# (platform_fsx.tf) already registers the driver, and two installs would collide. No IAM:
+# the driver only needs AWS credentials to provision/describe file systems, which nothing
+# does on this path; it exists to satisfy the dependency check.
+resource "aws_eks_addon" "hyperpod_fsx_csi_driver" {
+  count = local.hyperpod_gw_enabled && !var.enable_fsx ? 1 : 0
+
+  cluster_name = module.eks_cluster.cluster_name
+  addon_name   = "aws-fsx-csi-driver"
+  tags         = local.combined_tags
+
+  configuration_values = jsonencode({
+    controller = {
       nodeSelector = local.system_node_selector
       tolerations  = [local.system_toleration]
+    }
+    node = {
+      tolerations = [{ operator = "Exists" }]
     }
   })
 
@@ -226,11 +324,19 @@ resource "aws_eks_addon" "hyperpod_inference" {
       inferenceGateway = {
         enabled        = true
         serviceAccount = { roleArn = module.hyperpod_gateway_controller_role[0].role_arn }
+        # Accepted by the v2.1.0-eksbuild.1 schema but NOT rendered onto the controller
+        # Deployment (verified live: it schedules anywhere). Kept so placement takes effect
+        # once the add-on honors it.
+        nodeSelector = local.system_node_selector
+        tolerations  = [local.system_toleration]
+      }
+      keda = { enabled = false }
+      alb = {
+        enabled        = true
+        serviceAccount = { create = true, roleArn = module.hyperpod_alb_controller_role[0].role_arn }
         nodeSelector   = local.system_node_selector
         tolerations    = [local.system_toleration]
       }
-      keda = { enabled = false }
-      alb  = { enabled = false }
     },
     # Optional: only when a HyperPod cluster is attached to this EKS cluster.
     var.hyperpod_cluster_arn == "" ? {} : { hyperpodClusterArn = var.hyperpod_cluster_arn },
@@ -250,6 +356,10 @@ resource "aws_eks_addon" "hyperpod_inference" {
     null_resource.cluster_addons,
     module.node_group,
     aws_eks_addon.cert_manager,
+    aws_eks_addon.hyperpod_fsx_csi_driver,
+    helm_release.fsx_csi_driver,
+    aws_iam_role_policy.hyperpod_alb_controller,
+    aws_iam_role_policy.hyperpod_operator_pass_role,
     aws_vpc_endpoint.hyperpod_gateway,
     # The kube-prometheus-stack CRDs (PodMonitor/ServiceMonitor) the gateway emits.
     helm_release.kube_prometheus_stack,
@@ -268,13 +378,20 @@ resource "helm_release" "hyperpod_gateway" {
     gatewayName    = local.hyperpod_gateway_config_name
     schedulerLabel = local.hyperpod_gateway_scheduler_label
     schedulers = [for s in var.hyperpod_inference_gateway_schedulers : {
-      name       = s.name
-      modelName  = s.model_name
-      targetPort = s.target_port
+      name       = s["name"]
+      modelName  = s["model_name"]
+      targetPort = tonumber(s["target_port"])
     }]
     podDefaults = {
       nodeSelector = local.system_node_selector
       tolerations  = [local.system_toleration]
+      # The controller's EPP default is 4 CPU / 8Gi per replica (x2 per scheduler), which
+      # cannot fit the m6i.xlarge system NG — pods stay Pending (verified live). The EPP and
+      # BBR are light control-plane-ish pods; size them for the system NG.
+      resources = {
+        requests = { cpu = "250m", memory = "512Mi" }
+        limits   = { memory = "2Gi" }
+      }
     }
     serviceMonitorLabel = { release = "kube-prometheus-stack" }
     gatewayNamespace    = local.hyperpod_inference_namespace

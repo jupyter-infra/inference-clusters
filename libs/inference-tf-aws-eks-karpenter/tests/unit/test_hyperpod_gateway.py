@@ -114,9 +114,9 @@ class TestGatewayIsOptIn(unittest.TestCase):
         for m in headers:
             body = _block(content[m.start() :], re.escape(m.group(0)))
             name = m.group(0)
-            gated = re.search(r"count\s*=\s*local\.hyperpod_gw_enabled\s*\?\s*1\s*:\s*0", body) or re.search(
-                r"for_each\s*=\s*local\.hyperpod_gateway_endpoints", body
-            )
+            gated = re.search(
+                r"count\s*=\s*local\.hyperpod_gw_enabled(\s*&&[^?]+)?\s*\?\s*1\s*:\s*0", body
+            ) or re.search(r"for_each\s*=\s*local\.hyperpod_gateway_endpoints", body)
             self.assertTrue(gated, f"{name} is not gated on enable_hyperpod_inference_gateway")
         self.assertIn("local.hyperpod_gw_enabled ? toset(", content, "endpoint set must be empty when disabled")
         self.assertRegex(content, r"hyperpod_gw_enabled\s*=\s*var\.enable_hyperpod_inference_gateway")
@@ -153,12 +153,32 @@ class TestAddonConfiguration(unittest.TestCase):
         self.assertIn("executionRoleArn", self.ADDON)
         self.assertIn("tlsCertificateS3Bucket", self.ADDON)
 
-    def test_bundled_keda_and_alb_are_disabled(self) -> None:
-        """The add-on bundles KEDA + the ALB controller, both on by default. The template already
-        runs KEDA (platform_keda.tf): a second one fights over the keda.sh CRDs and the
-        external-metrics APIService. No ALB on the endpoints-only VPC."""
+    def test_bundled_keda_disabled_and_alb_wired_to_its_irsa_role(self) -> None:
+        """The add-on bundles KEDA, on by default; the template already runs KEDA
+        (platform_keda.tf), and a second one fights over the keda.sh CRDs and the
+        external-metrics APIService. The bundled ALB controller must stay ON: the operator's
+        init check hard-requires the elbv2.k8s.aws CRDs (verified live)."""
         self.assertRegex(self.ADDON, r"keda\s*=\s*\{\s*enabled\s*=\s*false\s*\}")
-        self.assertRegex(self.ADDON, r"alb\s*=\s*\{\s*enabled\s*=\s*false\s*\}")
+        alb = _block(self.ADDON, r"alb\s*=")
+        self.assertRegex(alb, r"enabled\s*=\s*true")
+        self.assertIn("module.hyperpod_alb_controller_role[0].role_arn", alb)
+
+    def test_operator_dependency_check_is_satisfied(self) -> None:
+        """The operator init container requires CSIDriver fsx.csi.aws.com: installed by the
+        aws-fsx-csi-driver add-on unless enable_fsx's Helm release already provides it
+        (never both — they would collide on the CSIDriver object)."""
+        content = GATEWAY_TF.read_text()
+        fsx = _resource(content, "aws_eks_addon", "hyperpod_fsx_csi_driver")
+        self.assertRegex(fsx, r"count\s*=\s*local\.hyperpod_gw_enabled\s*&&\s*!var\.enable_fsx\s*\?\s*1\s*:\s*0")
+        self.assertIn('addon_name   = "aws-fsx-csi-driver"', fsx)
+        deps = re.search(r"depends_on\s*=\s*\[(.*?)\]", self.ADDON, re.S)
+        assert deps is not None
+        for dep in (
+            "aws_eks_addon.hyperpod_fsx_csi_driver",
+            "helm_release.fsx_csi_driver",
+            "aws_eks_addon.cert_manager",
+        ):
+            self.assertIn(dep, deps.group(1))
 
     def test_hyperpod_cluster_arn_only_passed_when_set(self) -> None:
         """hyperpodClusterArn is optional in the schema; an empty string would fail its ARN pattern."""
@@ -185,9 +205,11 @@ class TestAddonIam(unittest.TestCase):
         self.assertEqual(_tf_local("hyperpod_inference_namespace"), ADDON_NAMESPACE)
         self.assertEqual(_tf_local("hyperpod_operator_sa"), OPERATOR_SA)
         self.assertEqual(_tf_local("hyperpod_gateway_controller_sa"), GATEWAY_CONTROLLER_SA)
+        self.assertEqual(_tf_local("hyperpod_alb_controller_sa"), "aws-load-balancer-controller")
         for doc, sa_local in (
             ("hyperpod_operator_trust", "hyperpod_operator_sa"),
             ("hyperpod_gateway_controller_trust", "hyperpod_gateway_controller_sa"),
+            ("hyperpod_alb_controller_trust", "hyperpod_alb_controller_sa"),
         ):
             body = _block(self.CONTENT, rf'data\s+"aws_iam_policy_document"\s+"{doc}"')
             self.assertIn("sts:AssumeRoleWithWebIdentity", body)
@@ -203,6 +225,22 @@ class TestAddonIam(unittest.TestCase):
             body = _block(self.CONTENT, rf'module\s+"{module}"')
             self.assertIn(policy, body)
             self.assertIn("${local.resource_name_prefix}", body, f"{module} name must embed the postfix")
+
+    def test_operator_may_pass_only_its_own_role_to_sagemaker(self) -> None:
+        """At start-up the operator calls sagemaker:UpdateClusterInference passing its own
+        execution role; without iam:PassRole it crash-loops (verified live). The grant must be
+        scoped to that one role and to SageMaker as the receiving service."""
+        doc = _block(self.CONTENT, r'data\s+"aws_iam_policy_document"\s+"hyperpod_operator_pass_role"')
+        self.assertRegex(doc, r'actions\s*=\s*\["iam:PassRole"\]')
+        self.assertRegex(doc, r"resources\s*=\s*\[module\.hyperpod_operator_role\[0\]\.role_arn\]")
+        self.assertIn('variable = "iam:PassedToService"', doc)
+        self.assertIn('values   = ["sagemaker.amazonaws.com"]', doc)
+        policy = _resource(self.CONTENT, "aws_iam_role_policy", "hyperpod_operator_pass_role")
+        self.assertIn("module.hyperpod_operator_role[0].role_name", policy)
+        addon = _resource(self.CONTENT, "aws_eks_addon", "hyperpod_inference")
+        self.assertIn(
+            "aws_iam_role_policy.hyperpod_operator_pass_role", addon, "grant must exist before the operator starts"
+        )
 
     def test_tls_bucket_is_in_the_managed_policy_scope(self) -> None:
         """AmazonSageMakerHyperPodInferenceAccess grants S3 only on `hyperpod-tls*` buckets, and the
@@ -250,8 +288,12 @@ class TestSchedulerLabelContract(unittest.TestCase):
     def test_terraform_scheduler_fields_map_onto_chart_values(self) -> None:
         """The helm_release translates the tf object (snake_case) to the chart's camelCase keys."""
         release = _resource(GATEWAY_TF.read_text(), "helm_release", "hyperpod_gateway")
-        for chart_key, tf_attr in (("name", "s.name"), ("modelName", "s.model_name"), ("targetPort", "s.target_port")):
-            self.assertRegex(release, rf"{chart_key}\s*=\s*{re.escape(tf_attr)}\b")
+        for chart_key, tf_attr in (
+            ("name", 's["name"]'),
+            ("modelName", 's["model_name"]'),
+            ("targetPort", 'tonumber(s["target_port"])'),
+        ):
+            self.assertRegex(release, rf"{chart_key}\s*=\s*{re.escape(tf_attr)}")
         chart_scheduler = yaml.safe_load((GATEWAY_CHART / "values.yaml").read_text())["schedulers"][0]
         self.assertEqual(set(chart_scheduler), {"name", "modelName", "targetPort"})
 
@@ -298,7 +340,48 @@ class TestGatewayChartRender(unittest.TestCase):
         self.assertEqual(len(monitors), 2, "one PodMonitor for the EPPs, one for the BBR")
         for pm in monitors:
             self.assertEqual(pm["metadata"]["labels"].get("release"), "kube-prometheus-stack")
-        self.assertEqual([d["kind"] for d in _render("scrape.enabled=false")], ["InferenceGatewayConfig"])
+        self.assertEqual(
+            sorted(d["kind"] for d in _render("scrape.enabled=false")), ["InferenceGatewayConfig", "NetworkPolicy"]
+        )
+
+    def test_epp_admits_envoy_and_prometheus_through_network_policy(self) -> None:
+        """The add-on's own EPP NetworkPolicy only admits same-namespace callers, but Envoy runs
+        in the add-on namespace and Prometheus in monitoring: with policy enforcement on (this
+        template), every gateway request 500s on ext-proc timeout without this (verified live)."""
+        (netpol,) = [d for d in _render() if d["kind"] == "NetworkPolicy"]
+        self.assertEqual(
+            netpol["spec"]["podSelector"],
+            {"matchExpressions": [{"key": "inference.sagemaker.aws.amazon.com/scheduler", "operator": "Exists"}]},
+        )
+        admitted = {
+            (rule["from"][0]["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"], p["port"])
+            for rule in netpol["spec"]["ingress"]
+            for p in rule["ports"]
+        }
+        self.assertEqual(admitted, {("hyperpod-inference-system", 9002), ("monitoring", 9090)})
+
+
+class TestGatewayPodsFitTheSystemNodeGroup(unittest.TestCase):
+    def test_epp_and_bbr_are_pinned_and_sized(self) -> None:
+        """The controller's EPP default (4 CPU / 8Gi x2 per scheduler) cannot schedule on the
+        m6i.xlarge system NG (verified live: Pending), so podDefaults must pin AND size them."""
+        release = _resource(GATEWAY_TF.read_text(), "helm_release", "hyperpod_gateway")
+        pod_defaults = _block(release, r"podDefaults\s*=")
+        self.assertIn("local.system_node_selector", pod_defaults)
+        self.assertIn("local.system_toleration", pod_defaults)
+        self.assertRegex(pod_defaults, r"requests\s*=\s*\{\s*cpu\s*=")
+        self.assertRegex(pod_defaults, r"limits\s*=\s*\{\s*memory\s*=")
+
+    def test_igc_is_rendered_with_mandatory_tls(self) -> None:
+        """spec.tls is required by the CRD (no HTTP-only mode); omitting it is rejected at admission."""
+        igc = next(d for d in _render() if d["kind"] == "InferenceGatewayConfig")
+        self.assertEqual(igc["spec"]["tls"], {}, "default = auto-issue")
+        byo = next(
+            d
+            for d in _render("tls.acmArn=arn:aws:acm:us-east-1:123456789012:certificate/abc")
+            if d["kind"] == "InferenceGatewayConfig"
+        )
+        self.assertEqual(byo["spec"]["tls"], {"acmArn": "arn:aws:acm:us-east-1:123456789012:certificate/abc"})
 
 
 class TestGatewayChartVersioned(unittest.TestCase):

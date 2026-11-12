@@ -378,17 +378,16 @@ variable "hyperpod_inference_gateway_schedulers" {
   description = <<-EOT
     The per-model schedulers (endpoint pickers) of the default InferenceGatewayConfig.
 
-    Each entry routes requests whose OpenAI body `model` equals model_name to the pods
-    labeled inference/gateway-scheduler=<name> in the workload namespace, on target_port.
+    Each entry is a map with keys name, model_name and target_port: it routes requests
+    whose OpenAI body `model` equals model_name to the pods labeled
+    inference/gateway-scheduler=<name> in the workload namespace, on target_port.
     At least one entry is required; model_name must be unique.
 
-    Recommended: [{ name = "default", model_name = "default", target_port = 8000 }]
+    Recommended: [{ name = "default", model_name = "default", target_port = "8000" }]
   EOT
-  type = list(object({
-    name        = string
-    model_name  = string
-    target_port = number
-  }))
+  # list(map(string)), not list(object(...)): jd only parses string / number / bool /
+  # list(string) / map(string) / list(map(string)) variable types.
+  type = list(map(string))
 
   validation {
     condition     = length(var.hyperpod_inference_gateway_schedulers) >= 1
@@ -396,14 +395,20 @@ variable "hyperpod_inference_gateway_schedulers" {
   }
 
   validation {
-    condition = length(distinct([for s in var.hyperpod_inference_gateway_schedulers : s.model_name])) == length(
+    condition = alltrue([for s in var.hyperpod_inference_gateway_schedulers :
+    length(setsubtract(["name", "model_name", "target_port"], keys(s))) == 0 && can(tonumber(s["target_port"]))])
+    error_message = "each hyperpod_inference_gateway_schedulers entry needs name, model_name and a numeric target_port."
+  }
+
+  validation {
+    condition = length(distinct([for s in var.hyperpod_inference_gateway_schedulers : lookup(s, "model_name", "")])) == length(
       var.hyperpod_inference_gateway_schedulers
     )
     error_message = "hyperpod_inference_gateway_schedulers model_name values must be unique."
   }
 
   validation {
-    condition     = alltrue([for s in var.hyperpod_inference_gateway_schedulers : can(regex("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$", s.name))])
+    condition     = alltrue([for s in var.hyperpod_inference_gateway_schedulers : can(regex("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$", lookup(s, "name", "")))])
     error_message = "hyperpod_inference_gateway_schedulers name must be a DNS-1123 label (it names the generated InferencePool and is a pod label value)."
   }
 }

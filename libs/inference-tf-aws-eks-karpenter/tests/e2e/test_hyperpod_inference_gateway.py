@@ -32,16 +32,26 @@ RELEASE = "vllm-gateway-e2e"
 CLIENT_POD = "gateway-client"
 PROMETHEUS_PROXY = "/api/v1/namespaces/monitoring/services/kube-prometheus-stack-prometheus:9090/proxy"
 REQUESTS_SENT = 5
+SYSTEM_NG_OVERRIDES = {
+    "spec": {
+        "nodeSelector": {"inference/role": "system"},
+        "tolerations": [{"key": "inference/role", "operator": "Equal", "value": "system", "effect": "NoSchedule"}],
+    }
+}
 
-# The gateway's REAL metric names, as observed in the live Prometheus (Gateway API Inference
-# Extension EPP metrics, labeled per model / per InferencePool). Each MUST grow by at least
-# REQUESTS_SENT after the requests go through the gateway.
+# The gateway's REAL metric names, as observed live (add-on v2.1.0-eksbuild.1, llm-d EPP):
+# per-model counters on the scheduler's EPP pods, labeled model_name / target_model_name.
+# Each MUST grow by at least REQUESTS_SENT once the requests have gone through the gateway.
 POOL_REQUEST_METRICS = (
     "inference_objective_request_total",
     "inference_objective_request_duration_seconds_count",
     "inference_objective_input_tokens_count",
     "inference_objective_output_tokens_count",
+    "llm_d_epp_request_total",
 )
+# The shared Body-Based Router counts every request whose body `model` it resolved
+# (no model label: it is model-agnostic).
+BBR_SUCCESS_METRIC = "bbr_success_total"
 
 
 @pytest.fixture(scope="module")
@@ -98,21 +108,25 @@ def _condition(obj: dict, type_: str) -> dict:
 def _gateway_url(e2e: EndToEndDeployment) -> str:
     """In-cluster URL of the Envoy Service fronting the default InferenceGatewayConfig.
 
-    Envoy Gateway names the data-plane Service after a hash, so it is discovered by the
-    owning-gateway labels rather than hardcoded."""
-    name = h.jd_output(e2e, "hyperpod_inference_gateway_config_name")
+    The controller creates the Gateway (named after the IGC) in the ADD-ON namespace, and Envoy
+    Gateway names the data-plane Service after a hash, so it is discovered by the
+    owning-gateway labels rather than hardcoded. Its listener is plain HTTP :80 in-cluster
+    (TLS is terminated at the load balancer the controller requests)."""
+    gw_ns = h.jd_output(e2e, "hyperpod_inference_namespace")
+    selector = h.jd_output(e2e, "hyperpod_inference_gateway_service_selector")
     out = run_kubectl(
         "get",
         "svc",
-        "-A",
+        "-n",
+        gw_ns,
         "-l",
-        f"gateway.envoyproxy.io/owning-gateway-name={name},gateway.envoyproxy.io/owning-gateway-namespace={h.NAMESPACE}",
+        selector,
         "-o",
         "json",
         check=True,
     ).stdout
     items = json.loads(out)["items"]
-    assert items, f"no Envoy Service found for gateway {h.NAMESPACE}/{name}"
+    assert items, f"no Envoy Service found in {gw_ns} for {selector}"
     svc = items[0]
     port = next(p["port"] for p in svc["spec"]["ports"] if p.get("protocol", "TCP") == "TCP")
     return f"http://{svc['metadata']['name']}.{svc['metadata']['namespace']}.svc:{port}"
@@ -128,28 +142,24 @@ def _prom_scalar(query: str) -> float:
 
 
 def _send_chat_requests(e2e: EndToEndDeployment, url: str, model: str, count: int) -> list[dict]:
-    """POST `count` chat completions to the gateway from one in-cluster client pod.
+    """POST `count` chat completions to the gateway from one in-cluster client pod
+    (resources/gateway-client.py on the python image) and return the parsed responses.
 
-    The first request retries (vLLM cold start, EPP warm-up); the rest are single shots and
-    must each return a completion. Returns the parsed responses."""
-    prompt = h._chat_prompt(model)
-    first = h._retry_invoke_script(f"{url}/v1/chat/completions", prompt, attempts=30, read_timeout_s=300, backoff_s=8)
-    rest = (
-        f"for i in $(seq 2 {count}); do "
-        f"  wget -q -O- -T 300 --post-data='{prompt}' --header='Content-Type: application/json' "
-        f"    {url}/v1/chat/completions || exit 1; echo; "
-        "done"
-    )
-    script = f"{first.replace('exit 0', 'break')}; {rest}"
+    The first request retries (vLLM cold start, EPP warm-up); the rest must each succeed."""
+    script = (h.RESOURCES_DIR / "gateway-client.py").read_text()
     run_kubectl("delete", "pod", CLIENT_POD, "-n", h.NAMESPACE, "--ignore-not-found", check=False)
     run_kubectl(
-        "run", CLIENT_POD, "-n", h.NAMESPACE, "--restart=Never", f"--image={h.client_image(e2e)}", "--",
-        "sh", "-c", script, check=True,
+        "run", CLIENT_POD, "-n", h.NAMESPACE, "--restart=Never", f"--image={h.python_image(e2e)}",
+        f"--env=GATEWAY_URL={url}", f"--env=MODEL={model}", f"--env=COUNT={count}",
+        # Pin to the system NG: attached HyperPod nodes are untainted but their instance role
+        # cannot import ECR pull-through images, so an unpinned client may never pull.
+        f"--overrides={json.dumps(SYSTEM_NG_OVERRIDES)}",
+        "--", "python", "-c", script, check=True,
     )  # fmt: skip
     try:
         run_kubectl(
             "wait", "--for=jsonpath={.status.phase}=Succeeded", f"pod/{CLIENT_POD}", "-n", h.NAMESPACE,
-            "--timeout=900s", check=True,
+            "--timeout=900s", check=False,
         )  # fmt: skip
         out = run_kubectl("logs", CLIENT_POD, "-n", h.NAMESPACE, check=True).stdout
     finally:
@@ -177,20 +187,54 @@ def test_hyperpod_inference_addon_is_active(gateway: EndToEndDeployment) -> None
 
 @pytest.mark.full_deployment
 @pytest.mark.mutating
-def test_default_inference_gateway_config_is_ready(gateway: EndToEndDeployment) -> None:
-    deadline = time.monotonic() + 600
-    igc = _igc(gateway)
-    while _condition(igc, "Ready").get("status") != "True" and time.monotonic() < deadline:
+def _wait_for_conditions(e2e: EndToEndDeployment, types: tuple[str, ...], timeout_s: int = 600) -> dict:
+    """Poll the IGC until every condition in `types` is True at the current generation."""
+    deadline = time.monotonic() + timeout_s
+    igc = _igc(e2e)
+    while time.monotonic() < deadline:
+        current = igc.get("status", {}).get("observedGeneration") == igc["metadata"]["generation"]
+        if current and all(_condition(igc, t).get("status") == "True" for t in types):
+            break
         time.sleep(10)
-        igc = _igc(gateway)
-    assert _condition(igc, "Ready").get("status") == "True", f"IGC not Ready: {json.dumps(igc.get('status'))}"
-    assert igc["spec"]["bbr"]["enabled"] is True
+        igc = _igc(e2e)
+    for t in types:
+        assert _condition(igc, t).get("status") == "True", (
+            f"IGC condition {t} not True: {json.dumps(igc.get('status'))}"
+        )
+    return igc
+
+
+@pytest.mark.full_deployment
+@pytest.mark.mutating
+def test_default_inference_gateway_config_is_ready(gateway: EndToEndDeployment) -> None:
+    """The platform half of the gateway is up with no model attached yet: the controller
+    accepted the IGC, programmed the Gateway (Envoy + its internal NLB) and rolled out the BBR,
+    one EPP Deployment + InferencePool per scheduler, and the HTTPS ALB Ingress. The overall
+    `Ready` condition additionally needs model-server pods (BackendsNotReady until then), so
+    it is asserted by the serving test once a model is attached."""
+    igc = _wait_for_conditions(gateway, ("Accepted", "GatewayProgrammed", "BBRReady"))
+    gw_ns = h.jd_output(gateway, "hyperpod_inference_namespace")
     label_key = h.jd_output(gateway, "hyperpod_inference_gateway_scheduler_label")
+    assert igc["spec"]["bbr"]["enabled"] is True
     assert igc["spec"]["schedulers"], "the default gateway must declare at least one scheduler"
     for sched in igc["spec"]["schedulers"]:
         assert sched["modelSelector"]["matchLabels"] == {label_key: sched["name"]}, sched
-    # The data plane exists: an Envoy Service fronts the gateway.
+        run_kubectl("get", "inferencepool", sched["name"], "-n", h.NAMESPACE, check=True)
+        epps = run_kubectl(
+            "get", "deploy", "-n", h.NAMESPACE, "-l", f"inference.sagemaker.aws.amazon.com/scheduler={sched['name']}",
+            "-o", "jsonpath={.items[*].metadata.name}", check=True,
+        ).stdout.split()  # fmt: skip
+        assert epps, f"no EPP Deployment for scheduler {sched['name']}"
+        for epp in epps:
+            run_kubectl("rollout", "status", f"deployment/{epp}", "-n", h.NAMESPACE, "--timeout=300s", check=True)
     assert _gateway_url(gateway).startswith("http://")
+    # The external (in-VPC) HTTPS endpoint: an internal ALB Ingress fronted by the
+    # auto-issued ACM certificate.
+    name = h.jd_output(gateway, "hyperpod_inference_gateway_config_name")
+    ingress = json.loads(run_kubectl("get", "ingress", f"{name}-alb", "-n", gw_ns, "-o", "json", check=True).stdout)
+    annotations = ingress["metadata"]["annotations"]
+    assert annotations.get("alb.ingress.kubernetes.io/scheme") == "internal", annotations
+    assert annotations.get("alb.ingress.kubernetes.io/certificate-arn", "").startswith("arn:aws:acm:"), annotations
 
 
 @pytest.mark.gpu
@@ -218,9 +262,12 @@ def test_requests_through_gateway_increment_pool_metrics(gateway: EndToEndDeploy
             "rollout", "status", f"deployment/{RELEASE}", "-n", h.NAMESPACE, "--timeout=1200s", check=False
         )
         assert rollout.returncode == 0, f"vLLM rollout failed: {rollout.stderr}"
+        # With a labeled model pod in its pool, the IGC turns fully Ready.
+        _wait_for_conditions(gateway, ("Ready",))
 
         selector = f'{{model_name="{model}"}}'
         before = {m: _prom_scalar(f"sum({m}{selector})") for m in POOL_REQUEST_METRICS}
+        before[BBR_SUCCESS_METRIC] = _prom_scalar(f"sum({BBR_SUCCESS_METRIC})")
 
         _send_chat_requests(gateway, _gateway_url(gateway), model, REQUESTS_SENT)
 
@@ -229,10 +276,11 @@ def test_requests_through_gateway_increment_pool_metrics(gateway: EndToEndDeploy
         after = before
         while time.monotonic() < deadline:
             after = {m: _prom_scalar(f"sum({m}{selector})") for m in POOL_REQUEST_METRICS}
-            if all(after[m] - before[m] >= REQUESTS_SENT for m in POOL_REQUEST_METRICS):
+            after[BBR_SUCCESS_METRIC] = _prom_scalar(f"sum({BBR_SUCCESS_METRIC})")
+            if all(after[m] - before[m] >= REQUESTS_SENT for m in after):
                 break
             time.sleep(15)
-        for m in POOL_REQUEST_METRICS:
+        for m in after:
             assert after[m] - before[m] >= REQUESTS_SENT, (
                 f"{m}: {before[m]} -> {after[m]} after {REQUESTS_SENT} requests"
             )

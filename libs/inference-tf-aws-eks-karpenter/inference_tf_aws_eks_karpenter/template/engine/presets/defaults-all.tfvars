@@ -71,7 +71,7 @@ enable_hyperpod_inference_gateway = false
 hyperpod_inference_addon_version  = "v2.1.0-eksbuild.1"
 hyperpod_cluster_arn              = "" # optional: set when a HyperPod cluster is attached
 hyperpod_inference_gateway_schedulers = [
-  { name = "default", model_name = "default", target_port = 8000 },
+  { name = "default", model_name = "default", target_port = "8000" },
 ]
 
 # --- Image supply: common-utility images via pull-through ---

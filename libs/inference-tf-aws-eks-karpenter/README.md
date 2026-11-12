@@ -129,21 +129,46 @@ utilization and prefix-cache affinity).
 What the template provisions (all gated on the variable, see `engine/platform_hyperpod_gateway.tf`):
 - the `amazon-sagemaker-hyperpod-inference` EKS add-on (`hyperpod_inference_addon_version`,
   default `v2.1.0-eksbuild.1`; the gateway needs `v2.0.0-eksbuild.2`+) with
-  `inferenceOperator.enabled` and `inferenceGateway.enabled`. The add-on's bundled **KEDA** and
-  **ALB controller** are turned off: the template already runs KEDA, and the gateway is an
-  in-VPC endpoint (no ALB) on this endpoints-only VPC.
-- the `cert-manager` EKS add-on (operator webhook certs + gateway TLS auto-issue);
-- an **IAM OIDC provider** and two **IRSA** roles — the add-on only supports IRSA (its
+  `inferenceOperator.enabled` and `inferenceGateway.enabled`. The add-on's bundled **KEDA** is
+  turned off (the template already runs KEDA); its bundled **AWS Load Balancer Controller** stays
+  on, because the operator requires its CRDs (see prerequisites below);
+- the `cert-manager` EKS add-on, and the `aws-fsx-csi-driver` EKS add-on when `enable_fsx` is
+  false (with `enable_fsx` the template's FSx Helm release already registers the driver);
+- an **IAM OIDC provider** and three **IRSA** roles — the add-on only supports IRSA (its
   `podIdentityConfiguration` is empty), unlike the rest of the template, which uses Pod Identity:
-  the operator execution role (`AmazonSageMakerHyperPodInferenceAccess`) and the gateway
-  controller role (`AmazonSageMakerHyperPodInferenceGatewayAccess`);
+  the operator execution role (`AmazonSageMakerHyperPodInferenceAccess`), the gateway controller
+  role (`AmazonSageMakerHyperPodInferenceGatewayAccess`) and the bundled ALB controller role (the
+  AWS Load Balancer Controller policy the add-on documents, `engine/policies/`);
 - a `hyperpod-tls-<postfix>-*` S3 bucket for `tlsCertificateS3Bucket` (the managed policy only
   covers `hyperpod-tls*` buckets);
 - `sagemaker.api` and `acm` interface endpoints (the base VPC already has sts/eks/ecr/elb);
 - a default `InferenceGatewayConfig` named `inference-gateway` in the workload namespace
-  (`charts/hyperpod-gateway`), with `bbr.enabled` and one scheduler per
+  (`charts/hyperpod-gateway`), with `bbr.enabled`, `tls: {}` and one scheduler per
   `hyperpod_inference_gateway_schedulers` entry, plus PodMonitors so the in-cluster Prometheus
   scrapes the gateway's routing metrics.
+
+**Add-on prerequisites (verified live).** The operator pod's `check-csi-drivers` init container
+refuses to start (the add-on then never leaves `CREATING`) unless the cluster already has:
+the `s3.csi.aws.com` **and** `fsx.csi.aws.com` CSIDrivers, the AWS Load Balancer Controller CRDs
+(`ingressclassparams.elbv2.k8s.aws`, `targetgroupbindings.elbv2.k8s.aws`), the KEDA CRDs
+(`scaledobjects.keda.sh`, `scaledjobs.keda.sh`) and the cert-manager CRDs. The template satisfies
+all of them; a hand-rolled install must too.
+
+**TLS is mandatory.** The `InferenceGatewayConfig` CRD requires `spec.tls` — there is no
+HTTP-only mode. The default `tls: {}` auto-issues a self-signed certificate with cert-manager and
+imports it into ACM (gateway-controller IRSA role + `acm` endpoint); set the chart's
+`tls.acmArn` to bring your own certificate. Clients inside the VPC must trust that certificate
+(or skip verification for the self-signed default).
+
+**Endpoint and readiness (verified live).** The gateway controller creates the Gateway
+`inference-gateway` in `hyperpod-inference-system`. Its Envoy Service (find it with the
+`hyperpod_inference_gateway_service_selector` output; HTTP :80 in-cluster) gets an **internal
+NLB**, and an **internal ALB** Ingress `inference-gateway-alb` serves HTTPS 443 with the
+auto-issued ACM certificate. Both are created by the add-on's ALB controller, not by Terraform,
+and are removed when the `InferenceGatewayConfig` is deleted (the chart uninstalls before the
+add-on on destroy). The IGC reports `Accepted`, `GatewayProgrammed` and `BBRReady` once the
+platform side is up; `Ready` stays `False` (`BackendsNotReady`) until at least one labeled model
+pod is serving.
 
 **Attaching a model.** A scheduler `{name, model_name, target_port}` routes requests whose body
 `model` equals `model_name` to the pods labeled `inference/gateway-scheduler: <name>` in the
@@ -152,11 +177,27 @@ workload namespace. So a model Deployment (or the KRO starter `InferenceDeployme
 `model_name` (vLLM `--served-model-name`). Add more models by adding schedulers.
 
 **Constraints.** Mutually exclusive with `enable_inference_routing` (the add-on installs its own
-InferencePool CRDs). The gateway reads vLLM's KV-cache metric from vLLM >= 0.9.2; older servers
-still route on the remaining signals. No request authentication is configured by default
+InferencePool CRDs). `hyperpod_inference_gateway_schedulers` is a `list(map(string))` (keys
+`name`, `model_name`, `target_port`) rather than a `list(object(...))`, because `jd` only parses
+string / number / bool / `list(string)` / `map(string)` / `list(map(string))` variable types.
+
+**Model-server version.** The EPP scrapes each model pod's metrics to score it (queue depth,
+KV-cache utilization) and requires **vLLM >= 0.9.2** (or SGLang >= 0.3.5.post1 with
+`--enable-metrics`). Older servers are still routed to, but the EPP cannot read their metrics:
+`inference_pool_ready_pods` reads 0 and `llm_d_epp_datalayer_extract_errors_total` keeps
+climbing (observed live with the vLLM v0.6.6 e2e fixture). No request authentication is configured by default
 (`spec.auth.jwt` is the knob) — access is bounded by the VPC.
 
-**Does it need a HyperPod cluster?** TBD — being validated live (see the PR).
+**Does it need a HyperPod cluster?** The **operator** half does: at start-up it calls
+SageMaker `UpdateClusterInference` (EnableClusterInference) on the attached HyperPod cluster —
+discovered even when `hyperpod_cluster_arn` is empty — passing its own execution role (hence the
+template's least-privilege `iam:PassRole` grant), so on an EKS cluster with no HyperPod cluster
+the operator has nothing to enable. The **gateway** half does not depend on HyperPod: the
+gateway controller, its `inference-gateway` GatewayClass, Envoy, BBR and the EPPs are plain
+Kubernetes objects, and the add-on schema/release notes allow `inferenceOperator.enabled=false`
+with only the gateway on. AWS nevertheless publishes the add-on for `computeTypes: ["hyperpod"]`
+and documents an EKS-orchestrated HyperPod cluster as a prerequisite, so a gateway-only install
+on plain EKS is outside AWS's supported configuration (not exercised by this template).
 
 ## Requirements
 
@@ -222,6 +263,7 @@ project for descriptions and recommended values. Grouped by concern:
 | `hyperpod_inference_gateway_config_name` | Name of the default InferenceGatewayConfig (workload namespace; empty when disabled) |
 | `hyperpod_inference_gateway_scheduler_label` | Pod label key that attaches a model Deployment to a gateway scheduler |
 | `hyperpod_inference_gateway_models` | Model names (the OpenAI request model field) the default gateway routes (empty when disabled) |
+| `hyperpod_inference_gateway_service_selector` | Label selector of the gateway's Envoy Service in the add-on namespace — the in-VPC endpoint (http://SERVICE.NAMESPACE.svc:80) |
 | `hyperpod_inference_tls_bucket` / `hyperpod_inference_execution_role_arn` | The add-on's TLS-certificate bucket + IRSA execution role (empty when disabled) |
 
 Run `jd show --outputs --list` for the complete list.

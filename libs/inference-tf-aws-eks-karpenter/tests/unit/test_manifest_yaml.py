@@ -304,3 +304,18 @@ class TestManifest(unittest.TestCase):
             declared = {name.strip('"') for block in hcl2.load(f).get("variable", []) for name in block}
         undeclared = preset_keys - declared
         self.assertEqual(undeclared, set(), f"undeclared preset keys: {undeclared}")
+
+
+class TestVariableTypesParseableByJd(unittest.TestCase):
+    """jd parses variables.tf to drive `jd config`; a type it has no class for (e.g.
+    list(object(...))) is skipped and the variable then fails as 'Variable not found'."""
+
+    SUPPORTED = {"string", "number", "bool", "list(string)", "map(string)", "list(map(string))"}
+
+    def test_every_variable_type_is_supported(self) -> None:
+        with open(TEMPLATE_PATH / "engine" / "variables.tf") as f:
+            variables = hcl2.load(f)["variable"]
+        for entry in variables:
+            for name, body in entry.items():
+                tf_type = re.sub(r"[\s${}]", "", str(body.get("type", "")))
+                self.assertIn(tf_type, self.SUPPORTED, f"variable {name} has a type jd cannot parse: {tf_type}")

@@ -6,6 +6,7 @@ does not provision). The `release` label is what that Prometheus selects on.
   - EPP (one Deployment per scheduler, in THIS namespace): per-model request count /
     latency / token counters and InferencePool aggregates (ready pods, avg KV-cache, queue).
   - BBR (shared, in the add-on namespace): model-name extraction success/failure.
+Both serve /metrics unauthenticated (--metrics-endpoint-auth=false).
 */ -}}
 {{- if .Values.scrape.enabled }}
 apiVersion: monitoring.coreos.com/v1
@@ -25,9 +26,6 @@ spec:
     - port: {{ .Values.scrape.epp.port }}
       path: /metrics
       interval: {{ .Values.scrape.interval }}
-      bearerTokenSecret:
-        name: {{ .Values.gatewayName }}-metrics-reader
-        key: token
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
@@ -43,47 +41,11 @@ spec:
   selector:
     {{- toYaml .Values.scrape.bbr.selector | nindent 4 }}
   podMetricsEndpoints:
-    - port: {{ .Values.scrape.bbr.port }}
+    - portNumber: {{ .Values.scrape.bbr.declaredPort }}
       path: /metrics
       interval: {{ .Values.scrape.interval }}
----
-{{- /*
-Long-lived token for a dedicated metrics-reader identity, bound only to the
-non-resource URL /metrics (what the EPP's SubjectAccessReview checks).
-*/}}
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: {{ .Values.gatewayName }}-metrics-reader
-  namespace: {{ .Release.Namespace }}
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ .Values.gatewayName }}-metrics-reader
-  namespace: {{ .Release.Namespace }}
-  annotations:
-    kubernetes.io/service-account.name: {{ .Values.gatewayName }}-metrics-reader
-type: kubernetes.io/service-account-token
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: {{ .Release.Namespace }}-{{ .Values.gatewayName }}-metrics-reader
-rules:
-  - nonResourceURLs: ["/metrics"]
-    verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ .Release.Namespace }}-{{ .Values.gatewayName }}-metrics-reader
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ .Release.Namespace }}-{{ .Values.gatewayName }}-metrics-reader
-subjects:
-  - kind: ServiceAccount
-    name: {{ .Values.gatewayName }}-metrics-reader
-    namespace: {{ .Release.Namespace }}
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_ip]
+          targetLabel: __address__
+          replacement: "$1:{{ .Values.scrape.bbr.metricsPort }}"
 {{- end }}
